@@ -1,0 +1,53 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Voltaj global (us-east-1) - ACM certificate for CloudFront (shop and pay) and the WAF web ACL for CloudFront. Kept between workshop days.
+Parameters:
+  HostedZoneId: {Type: String, Default: Z03414782ECSLICW59USM}
+  ShopDomain: {Type: String, Default: shop.tdsynnexlab.link}
+  PayDomain: {Type: String, Default: pay.tdsynnexlab.link}
+  RateLimit: {Type: Number, Default: 2000, Description: Requests per 5 minutes per IP}
+Resources:
+  Cert:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref ShopDomain
+      SubjectAlternativeNames: [!Ref PayDomain]
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - {DomainName: !Ref ShopDomain, HostedZoneId: !Ref HostedZoneId}
+        - {DomainName: !Ref PayDomain, HostedZoneId: !Ref HostedZoneId}
+  WebAcl:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: voltaj-shop
+      Scope: CLOUDFRONT
+      DefaultAction: {Allow: {}}
+      VisibilityConfig: {SampledRequestsEnabled: true, CloudWatchMetricsEnabled: true, MetricName: voltaj-shop}
+      Rules:
+        - Name: rate-per-ip
+          Priority: 0
+          Action: {Block: {CustomResponse: {ResponseCode: 429}}}
+          Statement: {RateBasedStatement: {Limit: !Ref RateLimit, EvaluationWindowSec: 300, AggregateKeyType: IP}}
+          VisibilityConfig: {SampledRequestsEnabled: true, CloudWatchMetricsEnabled: true, MetricName: rate-per-ip}
+        - Name: aws-common
+          Priority: 1
+          OverrideAction: {None: {}}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesCommonRuleSet
+              RuleActionOverrides:
+                - {Name: SizeRestrictions_BODY, ActionToUse: {Count: {}}}
+          VisibilityConfig: {SampledRequestsEnabled: true, CloudWatchMetricsEnabled: true, MetricName: aws-common}
+        - Name: aws-bad-inputs
+          Priority: 2
+          OverrideAction: {None: {}}
+          Statement: {ManagedRuleGroupStatement: {VendorName: AWS, Name: AWSManagedRulesKnownBadInputsRuleSet}}
+          VisibilityConfig: {SampledRequestsEnabled: true, CloudWatchMetricsEnabled: true, MetricName: aws-bad-inputs}
+        - Name: aws-ip-reputation
+          Priority: 3
+          OverrideAction: {None: {}}
+          Statement: {ManagedRuleGroupStatement: {VendorName: AWS, Name: AWSManagedRulesAmazonIpReputationList}}
+          VisibilityConfig: {SampledRequestsEnabled: true, CloudWatchMetricsEnabled: true, MetricName: aws-ip-reputation}
+Outputs:
+  CertArn: {Value: !Ref Cert}
+  WebAclArn: {Value: !GetAtt WebAcl.Arn}

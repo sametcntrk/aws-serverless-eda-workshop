@@ -1,0 +1,35 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Voltaj integration - Amazon MQ for RabbitMQ (3-node cluster, private) for the 3PL and MSK Serverless (IAM) for clickstream and the commerce event log.
+Parameters:
+  Network: {Type: String, Default: voltaj-network}
+  InstanceType: {Type: String, Default: mq.m7g.large}
+Resources:
+  Broker:
+    Type: AWS::AmazonMQ::Broker
+    Properties:
+      BrokerName: voltaj-mq
+      EngineType: RABBITMQ
+      EngineVersion: '3.13'
+      HostInstanceType: !Ref InstanceType
+      DeploymentMode: CLUSTER_MULTI_AZ
+      PubliclyAccessible: false
+      AutoMinorVersionUpgrade: true
+      SubnetIds: !Split [',', {'Fn::ImportValue': !Sub '${Network}-DataSubnets'}]
+      SecurityGroups: [{'Fn::ImportValue': !Sub '${Network}-SgMq'}]
+      Users:
+        - Username: '{{resolve:secretsmanager:voltaj/mq:SecretString:username}}'
+          Password: '{{resolve:secretsmanager:voltaj/mq:SecretString:password}}'
+      Logs: {General: true}
+  Msk:
+    Type: AWS::MSK::ServerlessCluster
+    Properties:
+      ClusterName: voltaj-msk
+      ClientAuthentication: {Sasl: {Iam: {Enabled: true}}}
+      VpcConfigs:
+        - SubnetIds: !Split [',', {'Fn::ImportValue': !Sub '${Network}-DataSubnets'}]
+          SecurityGroups: [{'Fn::ImportValue': !Sub '${Network}-SgMsk'}]
+Outputs:
+  BrokerArn: {Value: !GetAtt Broker.Arn, Export: {Name: !Sub '${AWS::StackName}-BrokerArn'}}
+  BrokerId: {Value: !GetAtt Broker.Id, Export: {Name: !Sub '${AWS::StackName}-BrokerId'}}
+  AmqpEndpoint: {Value: !Select [0, !GetAtt Broker.AmqpEndpoints], Export: {Name: !Sub '${AWS::StackName}-AmqpEndpoint'}}
+  MskArn: {Value: !GetAtt Msk.Arn, Export: {Name: !Sub '${AWS::StackName}-MskArn'}}

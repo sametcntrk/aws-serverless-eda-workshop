@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Voltaj · Electronics, live on AWS</title>
+  <meta name="description" content="Voltaj is a demo electronics shop. Every click runs on a real serverless, event-driven AWS architecture, and the panel shows what happens behind it.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2311131A'/%3E%3Cpath d='M18 3 7 18h7l-2 11 11-15h-7z' fill='%23FFD400'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+  <a class="skip" href="#view">Skip to the content</a>
+
+  <!-- Learning layer (violet): never used by the shop itself -->
+  <section id="learnbar" class="lab" aria-label="Learning layer">
+    <div class="lab-inner">
+      <span class="lab-mark" aria-hidden="true">LAB</span>
+      <div id="journey" class="journey" hidden></div>
+      <div class="lab-actions">
+        <button id="journey-start" class="lab-btn" type="button">Start the guided journey</button>
+        <button id="tutor-toggle" class="lab-btn" type="button" aria-pressed="true">Tutorial</button>
+        <a class="lab-link" href="/lessons">101 lessons</a>
+        <a class="lab-link" href="/diagram" target="_blank" rel="noopener">Architecture diagram ↗</a>
+        <a class="lab-link" href="/reports">Reports and experiments</a>
+        <span id="ws-state" class="ws-state" data-state="closed" title="Live channel"><span class="sr">Live channel</span></span>
+      </div>
+    </div>
+    <div id="tutor" class="tutor" hidden>
+      <div class="tutor-meta"><span id="tutor-step"></span><span id="tutor-dots" class="dots" aria-hidden="true"></span></div>
+      <h2 id="tutor-title"></h2>
+      <p id="tutor-text"></p>
+      <div class="tutor-nav">
+        <button type="button" data-tutor="back">Back</button>
+        <button type="button" data-tutor="next" class="primary">Next</button>
+        <button type="button" data-tutor="close" class="quiet">Close</button>
+      </div>
+    </div>
+  </section>
+
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="logo" href="/" aria-label="Voltaj home">
+        <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8"/><path d="M18 3 7 18h7l-2 11 11-15h-7z"/></svg>
+        <span>VOLTAJ</span>
+      </a>
+      <form id="search-form" class="search" role="search" action="/search">
+        <label class="sr" for="header-q">Search products</label>
+        <input id="header-q" name="q" type="search" placeholder="Search phones, laptops, headphones…" autocomplete="off">
+        <button type="submit" aria-label="Search">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+        </button>
+        <div id="suggest" class="suggest" hidden></div>
+      </form>
+      <nav class="mainnav" aria-label="Shop">
+        <a href="/search">All products</a>
+        <a href="/orders">Orders</a>
+        <a href="/inbox">Inbox <span id="inbox-count" class="pill" hidden>0</span></a>
+        <a href="/admin">Back office</a>
+      </nav>
+      <button id="persona-chip" class="persona-chip" type="button" aria-haspopup="dialog">
+        <span id="persona-avatar" class="avatar" aria-hidden="true">?</span><span id="persona-name">Choose a persona</span>
+      </button>
+      <a id="cart-link" class="cart-link" href="/cart" aria-label="Cart">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h2l2.4 11.2a2 2 0 0 0 2 1.6h7.7a2 2 0 0 0 2-1.5L21 8H6"/><circle cx="10" cy="20" r="1.4"/><circle cx="17" cy="20" r="1.4"/></svg>
+        <span id="cart-count" class="cart-count">0</span>
+      </a>
+    </div>
+  </header>
+
+  <div class="layout">
+    <main id="view" tabindex="-1"></main>
+    <aside id="bts" class="bts lab-panel" aria-label="Behind the scenes">
+      <div class="bts-head">
+        <div>
+          <h2>Behind the scenes</h2>
+          <p>Every AWS call of this page, live. Later steps (payment, events, shipment) arrive here when they happen.</p>
+        </div>
+        <button id="bts-clear" class="quiet small" type="button">Clear</button>
+      </div>
+      <p id="bts-empty" class="bts-empty">Use the shop. Each action adds a numbered call here.</p>
+      <ol id="bts-list" class="bts-list"></ol>
+    </aside>
+  </div>
+
+  <div id="tutor-mini" class="tutor-mini lab" hidden>
+    <span id="tutor-mini-text"></span>
+    <button type="button" data-tutor="back">Back</button>
+    <button type="button" data-tutor="next" class="primary">Next</button>
+    <button type="button" data-tutor="close" class="quiet">Close</button>
+  </div>
+
+  <dialog id="persona-dialog" class="persona-dialog" aria-labelledby="persona-title">
+    <form method="dialog">
+      <h2 id="persona-title">Who are you today?</h2>
+      <p>Each persona is a real Cognito user with an order history. What you do stays under your own visitor ID, so other visitors do not see your cart.</p>
+      <div id="persona-list" class="persona-list"></div>
+      <div class="dialog-actions"><button value="" class="quiet">Close</button></div>
+    </form>
+  </dialog>
+
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>

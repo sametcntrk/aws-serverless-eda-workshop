@@ -1,0 +1,140 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Voltaj edge - CloudFront (SPA from S3 with OAC, /api/* to the REST API), WAF, Route 53 names, WebSocket custom domain.
+Parameters:
+  Data: {Type: String, Default: voltaj-data}
+  App: {Type: String, Default: voltaj-app}
+  HostedZoneId: {Type: String, Default: Z03414782ECSLICW59USM}
+  ShopDomain: {Type: String, Default: shop.tdsynnexlab.link}
+  WsDomain: {Type: String, Default: ws.shop.tdsynnexlab.link}
+  CertArn: {Type: String, Description: ACM certificate in us-east-1}
+  WebAclArn: {Type: String, Description: WAF web ACL (CLOUDFRONT scope)}
+Resources:
+  Oac:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig: {Name: voltaj-web-oac, OriginAccessControlOriginType: s3, SigningBehavior: always, SigningProtocol: sigv4}
+  SpaRouter:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: voltaj-spa-router
+      AutoPublish: true
+      FunctionConfig: {Comment: Paths without a file extension load the SPA, Runtime: cloudfront-js-2.0}
+      FunctionCode: |
+        function handler(event) {
+          var r = event.request;
+          if (r.uri.indexOf('.') === -1) {
+            if (r.uri === '/diagram' || r.uri.indexOf('/diagram/') === 0) { r.uri = '/diagram/index.html'; }
+            else { r.uri = r.uri.indexOf('/learn/') === 0 ? '/lesson.html' : '/index.html'; }
+          }
+          return r;
+        }
+  ApiPrefix:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: voltaj-api-prefix
+      AutoPublish: true
+      FunctionConfig: {Comment: /api/x goes to the REST API stage as /prod/x, Runtime: cloudfront-js-2.0}
+      FunctionCode: |
+        function handler(event) {
+          var r = event.request;
+          r.uri = r.uri.replace(/^\/api/, '') || '/';
+          return r;
+        }
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: Voltaj shop
+        Aliases: [!Ref ShopDomain]
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: PriceClass_100
+        DefaultRootObject: index.html
+        WebACLId: !Ref WebAclArn
+        ViewerCertificate: {AcmCertificateArn: !Ref CertArn, SslSupportMethod: sni-only, MinimumProtocolVersion: TLSv1.2_2021}
+        Origins:
+          - Id: web
+            DomainName: {'Fn::ImportValue': !Sub '${Data}-WebBucketDomain'}
+            OriginAccessControlId: !GetAtt Oac.Id
+            S3OriginConfig: {OriginAccessIdentity: ''}
+          - Id: api
+            DomainName: {'Fn::ImportValue': !Sub '${App}-ApiDomain'}
+            OriginPath: /prod
+            CustomOriginConfig: {OriginProtocolPolicy: https-only, OriginSSLProtocols: [TLSv1.2]}
+        DefaultCacheBehavior:
+          TargetOriginId: web
+          ViewerProtocolPolicy: redirect-to-https
+          Compress: true
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          ResponseHeadersPolicyId: 67f7725c-6f97-4210-82d7-5512b31e9d03
+          FunctionAssociations: [{EventType: viewer-request, FunctionARN: !GetAtt SpaRouter.FunctionMetadata.FunctionARN}]
+        CacheBehaviors:
+          - PathPattern: /api/*
+            TargetOriginId: api
+            ViewerProtocolPolicy: https-only
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+            Compress: true
+            FunctionAssociations: [{EventType: viewer-request, FunctionARN: !GetAtt ApiPrefix.FunctionMetadata.FunctionARN}]
+          - PathPattern: /images/*
+            TargetOriginId: web
+            ViewerProtocolPolicy: redirect-to-https
+            CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+            Compress: true
+  WebBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: {'Fn::ImportValue': !Sub '${Data}-WebBucket'}
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: cloudfront.amazonaws.com}
+            Action: s3:GetObject
+            Resource: !Sub
+              - 'arn:aws:s3:::${B}/*'
+              - B: {'Fn::ImportValue': !Sub '${Data}-WebBucket'}
+            Condition: {StringEquals: {'AWS:SourceArn': !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}'}}
+  ShopA:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref ShopDomain
+      Type: A
+      AliasTarget: {DNSName: !GetAtt Distribution.DomainName, HostedZoneId: Z2FDTNDATAQYW2}
+  ShopAAAA:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref ShopDomain
+      Type: AAAA
+      AliasTarget: {DNSName: !GetAtt Distribution.DomainName, HostedZoneId: Z2FDTNDATAQYW2}
+  WsCert:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref WsDomain
+      ValidationMethod: DNS
+      DomainValidationOptions: [{DomainName: !Ref WsDomain, HostedZoneId: !Ref HostedZoneId}]
+  WsDomainName:
+    Type: AWS::ApiGatewayV2::DomainName
+    Properties:
+      DomainName: !Ref WsDomain
+      DomainNameConfigurations: [{CertificateArn: !Ref WsCert, EndpointType: REGIONAL, SecurityPolicy: TLS_1_2}]
+  WsMapping:
+    Type: AWS::ApiGatewayV2::ApiMapping
+    Properties:
+      DomainName: !Ref WsDomainName
+      ApiId: {'Fn::ImportValue': !Sub '${App}-WsApiId'}
+      Stage: prod
+  WsA:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref WsDomain
+      Type: A
+      AliasTarget: {DNSName: !GetAtt WsDomainName.RegionalDomainName, HostedZoneId: !GetAtt WsDomainName.RegionalHostedZoneId}
+Outputs:
+  DistributionId: {Value: !Ref Distribution}
+  DistributionDomain: {Value: !GetAtt Distribution.DomainName}

@@ -1,0 +1,409 @@
+{
+ "fanout": {
+  "title": "Pub/sub fan-out: OrderPlaced herkese nasıl ulaştı?",
+  "summary": "Tek bir event, EventBridge kurallarıyla SNS'e, SQS kuyruğuna ve Kafka log'una aynı anda gider.",
+  "sample": true,
+  "hero": "Sipariş {orderId} onaylandı ve tek bir OrderPlaced event'i yayınlandı. Bu event e-postaya, SMS'e, depoya ve analitiğe nasıl ayrı ayrı ulaştı?",
+  "overview": "fanout",
+  "idea": "Yayıncı (Step Functions) kimin dinlediğini bilmez. Sadece commerce bus'a “sipariş verildi” der. Kurallar (rules) event'in alanlarına bakar ve eşleşen her hedefe bir kopya gönderir. Yeni bir tüketici eklemek için yayıncıyı değiştirmezsin: yeni bir kural eklersin.",
+  "stored": "EventBridge event'i bir zarfa koyar: id, source, detail-type, time ve senin gönderdiğin detail. Kurallar bu zarfın alanlarıyla eşleşir. Archive, aynı zarfı 7 gün saklar.",
+  "analogy": "Bir okul anons sistemi düşün. Müdür mikrofona bir kez “yarın tatil” der. Her sınıfın hoparlörü duyar, ama sadece ilgili sınıflar (kurallar) bir şey yapar: kantin siparişi iptal eder, servis şoförü rotayı değiştirir. Müdür kimin ne yaptığını bilmek zorunda değildir.",
+  "compare": {
+   "title": "Neden EventBridge? Aynı OrderPlaced mesajı için muadilleriyle kıyas",
+   "criteria": ["Model", "İçeriğe göre yönlendirme", "Birden çok tüketiciye kopya", "Geçmişi tekrar oynatma (replay)", "Sunucu yönetimi"],
+   "options": [
+    {"name": "Amazon EventBridge (bus)", "cells": ["✓ Event bus + kurallar", "✓ Event pattern ile her alana göre", "✓ Bir event'e birçok kural, her kurala 5 hedefe kadar", "✓ Archive ve replay", "✓ Serverless"]},
+    {"name": "Amazon SNS (topic)", "cells": ["~ Pub/sub topic (push)", "~ Subscription filter policy (attribute veya body)", "✓ Birçok subscription", "~ Sadece FIFO topic'lerde archive ve replay", "✓ Serverless"]},
+    {"name": "Amazon SQS (queue)", "cells": ["✕ Noktadan noktaya kuyruk (pull)", "✕ Kuyruk düzeyinde yönlendirme yok", "✕ Bir mesajı bir tüketici işler", "✕ Silinen mesaj geri gelmez", "✓ Serverless"]},
+    {"name": "Amazon MQ (RabbitMQ)", "cells": ["~ Broker: exchange + queue (AMQP)", "~ Routing key ve exchange tipi", "✓ Fanout exchange", "✕ Ack edilen mesaj kuyruktan silinir", "✕ Broker instance'larını sen seçersin"]},
+    {"name": "Amazon MSK (Kafka)", "cells": ["~ Kalıcı log, consumer offset ile okur", "✕ Filtreyi tüketici kendisi yapar", "✓ Her consumer group kendi kopyasını okur", "✓ Offset'i geri alarak yeniden okuma", "~ MSK Serverless veya provisioned"]}
+   ],
+   "decision": "Voltaj'da domain event'leri (OrderPlaced, ShipmentDispatched) için EventBridge seçildi: kurallarla içerik yönlendirmesi, archive/replay ve schema discovery tek yerde. Mesajı insanlara dağıtmak için SNS, tüketiciyi tamponlamak için SQS, eski WMS'in konuştuğu AMQP için Amazon MQ ve analitik log için MSK yanında duruyor. Her biri en iyi olduğu işi yapıyor.",
+   "sources": [
+    {"title": "Amazon EventBridge event buses", "url": "https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-event-bus.html"},
+    {"title": "EventBridge archive ve replay", "url": "https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-archive.html"},
+    {"title": "Amazon SNS subscription filter policies", "url": "https://docs.aws.amazon.com/sns/latest/dg/sns-message-filtering.html"},
+    {"title": "Amazon SNS FIFO archive ve replay", "url": "https://docs.aws.amazon.com/sns/latest/dg/fifo-message-archiving-replay.html"},
+    {"title": "Amazon SQS nedir", "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/welcome.html"},
+    {"title": "Amazon MQ for RabbitMQ", "url": "https://docs.aws.amazon.com/amazon-mq/latest/developer-guide/working-with-rabbitmq.html"},
+    {"title": "Amazon MSK nedir", "url": "https://docs.aws.amazon.com/msk/latest/developerguide/what-is-msk.html"}
+   ]
+  },
+  "try": [{"text": "Bir checkout yap ve paneldeki P3 · S5 rozetlerini izle", "href": "/cart"}, {"text": "Raporlar → Events: son bir saatin event'leri", "href": "/reports"}, {"text": "Aynı event'i iki kez gönder (idempotency)", "href": "/cart"}],
+  "glossary": [["Event bus", "Event'lerin geldiği ve kurallarla dağıtıldığı yer."], ["Rule", "Bir event pattern ve 1-5 hedef. Pattern eşleşirse event hedefe gider."], ["Fan-out", "Bir mesajın birçok alıcıya kopyalanması."], ["detail-type", "Event'in türü, örneğin OrderPlaced."]]
+ },
+ "saga": {
+  "title": "Saga ve compensation: ödeme başarısız olursa stok ne olur?",
+  "summary": "Step Functions Standard iş akışı adım adım ilerler, hata olursa yaptığı adımları geri alır.",
+  "hero": "Sipariş {orderId} için iş akışı stoğu ayırdı, ödemeyi bekledi ve sonra ya devam etti ya da geri aldı. Hangi adımda ne oldu?",
+  "overview": "saga",
+  "idea": "Bir checkout birden çok servise dokunur: DynamoDB (stok), ödeme sağlayıcısı, Aurora (sipariş), EventBridge. Hepsini tek bir veritabanı transaction'ı ile kilitleyemezsin. Saga her adımı ayrı yapar; bir adım başarısız olursa Catch bloğu önceki adımları tersine çevirir (compensation): ayrılan stok geri verilir ve PaymentFailed yayınlanır.",
+  "stored": "Step Functions her state'in girdisini ve çıktısını execution history içinde saklar (Standard'da 90 gün). Büyük resimde her kutu bir state; birine tıklayınca o state'in girdisini ve çıktısını görürsün.",
+  "analogy": "Bir tatil rezervasyonu: önce uçak, sonra otel, sonra araba. Araba bulunamazsa otel ve uçağı iptal edersin. Her rezervasyonun kendi iptal adımı vardır; saga bu iptalleri doğru sırayla yapar.",
+  "compare": {
+   "title": "Neden Step Functions Standard? Muadilleriyle kıyas",
+   "criteria": ["En uzun süre", "Çalışma garantisi", "Callback (.waitForTaskToken)", "Geçmiş (history)", "Ücretlendirme"],
+   "options": [
+    {"name": "Step Functions Standard", "cells": ["✓ 1 yıl", "✓ Exactly-once (Retry tanımlamazsan)", "✓ Destekler", "✓ API ile 90 gün", "~ State transition başına"]},
+    {"name": "Step Functions Express", "cells": ["✕ 5 dakika", "~ At-least-once (async)", "✕ Desteklemez", "~ CloudWatch Logs'ta", "✓ Execution, süre ve bellek"]},
+    {"name": "Sadece choreography (event'lerle)", "cells": ["✓ Sınır yok", "~ Her tüketici kendi idempotency'sini yapar", "~ Kendin kurarsın", "✕ Merkezi bir görünüm yok", "✓ Kullandığın servisler kadar"]}
+   ],
+   "decision": "Ödeme bekleme dakikalar sürebilir ve callback gerekir; ödeme ve stok gibi idempotent olmayan adımlar exactly-once ister. Bu yüzden checkout için Standard seçildi. Siparişten sonraki dağıtım (fan-out) ise choreography ile EventBridge üzerinden yapılır.",
+   "sources": [
+    {"title": "Choosing workflow type in Step Functions", "url": "https://docs.aws.amazon.com/step-functions/latest/dg/choosing-workflow-type.html"},
+    {"title": "Error handling (Catch, Retry)", "url": "https://docs.aws.amazon.com/step-functions/latest/dg/concepts-error-handling.html"}
+   ]
+  },
+  "try": [{"text": "Checkout yap, VoltPay'de Decline seç", "href": "/cart"}, {"text": "Raporlar → Saga executions", "href": "/reports"}],
+  "glossary": [["Saga", "Uzun bir iş akışını adımlara bölüp hata olunca geri alma deseni."], ["Compensation", "Bir adımın etkisini tersine çeviren adım."], ["Catch", "Hata olunca hangi state'e gidileceğini söyleyen blok."]]
+ },
+ "task-token": {
+  "title": "Task token ile callback: iş akışı webhook'u nasıl bekliyor?",
+  "summary": "Step Functions bir token verir ve durur; webhook gelince SendTaskSuccess ile devam eder.",
+  "hero": "Sipariş {orderId} için iş akışı VoltPay'den cevap bekledi. Bekleme sırasında hiçbir Lambda çalışmadı. Peki cevap gelince akış nasıl uyandı?",
+  "overview": "task-token",
+  "idea": "Payment state'i .waitForTaskToken ile çağrılır. Step Functions benzersiz bir task token üretir ve Lambda payment'a verir. Lambda token'ı DynamoDB'ye yazar, VoltPay'de ödemeyi oluşturur ve biter. İş akışı bekler. VoltPay webhook gönderince Lambda webhook HMAC imzasını kontrol eder, token'ı bulur ve SendTaskSuccess (veya SendTaskFailure) çağırır. Timeout dolarsa Catch compensation'ı başlatır.",
+  "stored": "Token DynamoDB idempotency tablosunda PAY#<orderId> anahtarıyla, 24 saat TTL ile durur. Webhook event'i de EVT#<id> anahtarıyla yazılır, böylece aynı webhook iki kez işlenmez.",
+  "analogy": "Kargo şubesine paket bırakıp bir takip fişi alırsın ve eve gidersin. Paket varınca şube fişteki numarayı arar ve seni haberdar eder. Beklerken şubede oturman gerekmez.",
+  "compare": {
+   "title": "Neden callback? Muadilleriyle kıyas",
+   "criteria": ["Beklerken maliyet", "Gecikme", "Karmaşıklık"],
+   "options": [
+    {"name": "Task token callback", "cells": ["✓ Bekleyen state için ek ücret yok (Standard)", "✓ Webhook gelir gelmez devam", "~ Token saklama ve imza kontrolü gerekir"]},
+    {"name": "Wait + polling döngüsü", "cells": ["~ Her deneme state transition", "✕ Polling aralığı kadar gecikme", "~ Döngü ve sayaç gerekir"]},
+    {"name": "Lambda içinde bekleme", "cells": ["✕ Bekleme süresi boyunca Lambda ücreti", "~ En fazla 15 dakika", "✕ Timeout riski"]}
+   ],
+   "decision": "Ödeme sağlayıcısı zaten webhook gönderiyor. Callback hem en ucuz hem de en hızlı yol.",
+   "sources": [{"title": "Wait for a callback with task token", "url": "https://docs.aws.amazon.com/step-functions/latest/dg/connect-to-resource.html#connect-wait-token"}]
+  },
+  "try": [{"text": "Checkout yap ve VoltPay'de No answer seç (timeout)", "href": "/cart"}],
+  "glossary": [["Task token", "Step Functions'ın bekleyen bir görev için ürettiği benzersiz anahtar."], ["Webhook", "Bir servisin olay olunca senin URL'ine HTTP POST göndermesi."], ["HMAC", "Paylaşılan gizli anahtarla imza; mesajın değişmediğini ve kimden geldiğini kanıtlar."]]
+ },
+ "idempotency": {
+  "title": "Idempotency ve at-least-once: aynı event iki kez gelirse?",
+  "summary": "Her tüketici event başına bir anahtar yazar; ikinci teslimatta koşul başarısız olur ve iş tekrar yapılmaz.",
+  "hero": "Sipariş {orderId} için OrderPlaced iki kez geldi. Depo iki paket göndermedi, sen iki e-posta almadın. Nasıl?",
+  "overview": "idempotency",
+  "idea": "SQS, SNS, MQ, MSK ve DynamoDB Streams “en az bir kez” teslim eder: nadiren de olsa aynı mesaj iki kez gelebilir. Bu yüzden her tüketici iş yapmadan önce DynamoDB'ye bir anahtar yazar (FUL#, MAIL#, SMS#...) ve attribute_not_exists(pk) koşulunu kullanır. İkinci yazma ConditionalCheckFailed alır; tüketici durur ve mesajı başarılı sayar.",
+  "stored": "Anahtar, event'in iş kimliğinden (eventId = orderId-placed) gelir. EventBridge her PutEvents'e yeni bir id verdiği için iş kimliği kullanmak önemlidir.",
+  "analogy": "Bir faturayı ödedin ve banka makbuzu verdi. Aynı fatura tekrar önüne gelirse önce makbuz klasörüne bakarsın; makbuz varsa tekrar ödemezsin.",
+  "compare": {
+   "title": "Neden DynamoDB koşullu yazma? Muadilleriyle kıyas",
+   "criteria": ["Atomik kontrol", "Otomatik temizlik", "Ek altyapı"],
+   "options": [
+    {"name": "DynamoDB conditional PutItem", "cells": ["✓ Koşul ve yazma tek işlem", "✓ TTL", "✓ Serverless tablo"]},
+    {"name": "SQS FIFO deduplication", "cells": ["~ 5 dakikalık deduplication aralığı", "✓ Otomatik", "~ Sadece FIFO kuyrukta, tek tüketici"]},
+    {"name": "Kontrolsüz tüketici", "cells": ["✕ Tekrar eden işler", "-", "-"]}
+   ],
+   "decision": "Her tüketici farklı servislerden (SQS, MQ, MSK) okuyor. DynamoDB koşullu yazma hepsinde aynı şekilde çalışıyor; Lambda Powertools'un idempotency yardımcısı da aynı fikri kullanır.",
+   "sources": [{"title": "DynamoDB condition expressions", "url": "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Expressions.ConditionExpressions.html"}, {"title": "SQS FIFO exactly-once processing", "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/FIFO-queues-exactly-once-processing.html"}]
+  },
+  "try": [{"text": "Checkout sonrası “Send OrderPlaced again”", "href": "/cart"}],
+  "glossary": [["At-least-once", "Mesaj en az bir kez teslim edilir; bazen iki kez."], ["Idempotent", "İki kez yapmak bir kez yapmakla aynı sonucu verir."]]
+ },
+ "dlq": {
+  "title": "Retry, DLQ ve redrive: tüketici bozulursa mesaj kaybolur mu?",
+  "summary": "SQS mesajı birkaç kez dener, sonra dead-letter queue'ya taşır; düzeltince redrive ile geri gönderirsin.",
+  "hero": "E-posta tüketicisi bozulunca mesaj nereye gitti ve nasıl geri geldi?",
+  "overview": "dlq",
+  "idea": "Lambda bir SQS mesajını işleyemezse mesaj visibility timeout sonunda kuyruğa geri döner ve receive count bir artar. maxReceiveCount (burada 3) aşılınca SQS mesajı DLQ'ya taşır. Böylece bozuk mesaj kuyruğu tıkamaz ve kaybolmaz. Hata düzelince redrive mesajları kaynak kuyruğa geri gönderir.",
+  "stored": "DLQ mesajı orijinal body ve attribute'larla saklar; ApproximateReceiveCount kaç kez denendiğini söyler. EventBridge kurallarının da kendi DLQ'su var (voltaj-rule-dlq).",
+  "analogy": "Postacı bir mektubu üç kez teslim etmeyi dener, olmazsa “teslim edilemeyen” rafına koyar. Adres düzelince raf boşaltılır ve mektuplar tekrar dağıtılır.",
+  "compare": {
+   "title": "Hata yönetimi seçenekleri",
+   "criteria": ["Mesaj kaybı", "Kuyruğu tıkama", "Geri alma"],
+   "options": [
+    {"name": "SQS redrive policy + DLQ", "cells": ["✓ Kaybolmaz", "✓ Bozuk mesaj ayrılır", "✓ Redrive (StartMessageMoveTask)"]},
+    {"name": "Sonsuz retry", "cells": ["✓ Kaybolmaz", "✕ Diğer mesajları geciktirir", "-"]},
+    {"name": "Hatayı yut ve sil", "cells": ["✕ Mesaj kaybolur", "✓", "✕"]}
+   ],
+   "decision": "Her async hedefin bir DLQ'su var. ReportBatchItemFailures ile sadece başarısız mesajlar tekrar denenir.",
+   "sources": [{"title": "Amazon SQS dead-letter queues", "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html"}, {"title": "DLQ redrive", "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-configure-dead-letter-queue-redrive.html"}]
+  },
+  "try": [{"text": "Raporlar → Queues and DLQ → Break, checkout, Fix, Redrive", "href": "/reports"}],
+  "glossary": [["DLQ", "Dead-letter queue: işlenemeyen mesajların kuyruğu."], ["Visibility timeout", "Bir mesaj okunduktan sonra diğer tüketicilerden gizli kaldığı süre."]]
+ },
+ "zero-etl": {
+  "title": "Zero-ETL: DynamoDB'deki ürün OpenSearch'te nasıl aranabilir oldu?",
+  "summary": "DynamoDB stream'i OpenSearch Ingestion pipeline'ı ile index'e kopyalanır; kimse kod yazmaz.",
+  "hero": "“{q}” diye aradın. Ürünler DynamoDB'de duruyor, ama arama OpenSearch'te yapıldı. Veri oraya nasıl gitti?",
+  "overview": "zero-etl",
+  "idea": "Katalog tablosu (voltaj-catalog) DynamoDB Streams ve PITR ile çalışır. OpenSearch Ingestion pipeline'ı önce tablonun bir export'unu alır, sonra stream'deki her değişikliği (INSERT, MODIFY, REMOVE) products index'ine yazar. Ürün fonksiyonu aramayı OpenSearch'te yapar, güncel fiyat ve stoğu yine DynamoDB'den okur.",
+  "stored": "Solda DynamoDB item'ı (tipli JSON: S, N, L), sağda OpenSearch dokümanı. Metin alanları (name, short) analyzer'dan geçer ve kelimelere bölünür; category hem text hem keyword olarak durur.",
+  "analogy": "Kütüphanede kitaplar raflarda (DynamoDB). Arama için ayrı bir kart kataloğu (OpenSearch) var. Yeni kitap rafa girince bir görevli kartı da otomatik yazar; sen kartları elle güncellemezsin.",
+  "compare": {
+   "title": "Neden zero-ETL? Muadilleriyle kıyas",
+   "criteria": ["Kod", "Gecikme", "Tam metin arama"],
+   "options": [
+    {"name": "DynamoDB zero-ETL → OpenSearch", "cells": ["✓ Pipeline yapılandırması, kod yok", "✓ Saniyeler", "✓ Analyzer, fuzzy, relevance"]},
+    {"name": "Stream + kendi Lambda'n", "cells": ["~ Kod ve hata yönetimi senin", "✓ Saniyeler", "✓"]},
+    {"name": "Sadece DynamoDB Scan/Query", "cells": ["✓", "✓", "✕ Tam metin arama yok"]}
+   ],
+   "decision": "Arama için OpenSearch gerekli; veriyi taşımak için kendi kodumuzu yazmak yerine yönetilen zero-ETL entegrasyonu seçildi.",
+   "sources": [{"title": "DynamoDB zero-ETL integration with OpenSearch Service", "url": "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/OpenSearchIngestionForDynamoDB.html"}, {"title": "Using an OpenSearch Ingestion pipeline with DynamoDB", "url": "https://docs.aws.amazon.com/opensearch-service/latest/developerguide/configure-client-ddb.html"}]
+  },
+  "try": [{"text": "Fuzzy deneyi: “hedphones”", "href": "/search?q=hedphones"}, {"text": "Back office'te ürün kaydet ve ara", "href": "/admin"}],
+  "glossary": [["Zero-ETL", "Veriyi elle yazılan ETL kodu olmadan bir servisten diğerine taşıyan yönetilen entegrasyon."], ["Analyzer", "Metni arama için kelimelere bölen ve normalleştiren adım."]]
+ },
+ "ddb-conditional": {
+  "title": "DynamoDB koşullu yazma: stok neden eksiye düşmez?",
+  "summary": "ConditionExpression yazmayı sadece koşul doğruysa yapar; transaction birden çok satırı birlikte yazar.",
+  "hero": "Sepet ve stok güncellemeleri koşullarla yapıldı. Aynı anda iki kişi son ürünü alırsa ne olur?",
+  "overview": "ddb-conditional",
+  "idea": "UpdateItem ve TransactWriteItems bir ConditionExpression alabilir (available >= :qty). DynamoDB koşulu ve yazmayı tek atomik işlemde yapar. Koşul yanlışsa yazma olmaz ve ConditionalCheckFailed (transaction'da TransactionCanceled) döner. Böylece okuyup sonra yazma arasındaki yarış (race condition) olmaz.",
+  "stored": "Stok tablosunda her ürün için available ve reserved alanları var. Checkout available'ı azaltıp reserved'ı artırır; compensation tersini yapar.",
+  "analogy": "Sinemada son koltuğu iki kişi aynı anda ister. Gişe görevlisi “koltuk boşsa sat” kuralını tek hareketle uygular; ikinci kişiye “dolu” der.",
+  "compare": {
+   "title": "Stok ayırma seçenekleri",
+   "criteria": ["Yarış durumu", "Çok satır", "Gecikme"],
+   "options": [
+    {"name": "Conditional UpdateItem / TransactWriteItems", "cells": ["✓ Atomik", "✓ Transaction ile 100 öğeye kadar", "✓ Tek istek"]},
+    {"name": "Oku, kontrol et, yaz", "cells": ["✕ Arada başkası yazabilir", "✕", "~ İki istek"]}
+   ],
+   "decision": "Checkout tüm sepet satırlarını tek bir TransactWriteItems ile ayırır: ya hepsi ya hiçbiri.",
+   "sources": [{"title": "Condition expressions", "url": "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Expressions.ConditionExpressions.html"}, {"title": "DynamoDB transactions", "url": "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/transaction-apis.html"}]
+  },
+  "try": [{"text": "Bir ürüne 5'ten fazla ekle", "href": "/search"}],
+  "glossary": [["ConditionExpression", "Yazmanın yapılması için doğru olması gereken koşul."], ["WRU / RRU", "On-demand tabloda yazma ve okuma istek birimleri."]]
+ },
+ "websocket": {
+  "title": "WebSocket push: sonuç sayfaya nasıl geldi?",
+  "summary": "API Gateway WebSocket API açık bir bağlantı tutar; Lambda @connections ile mesaj gönderir.",
+  "hero": "Sayfayı yenilemeden sipariş sonucu ve paneldeki yeni satırlar geldi. Bunlar nereden geldi?",
+  "overview": "websocket",
+  "idea": "Tarayıcı ws.shop.tdsynnexlab.link'e bağlanır; $connect route'unda Lambda authorizer Cognito token'ını kontrol eder ve bağlantı DynamoDB'ye yazılır. İş akışı bitince Lambda ws bağlantıyı bulur ve POST @connections/<id> ile mesaj gönderir. Öğrenme paneli de aynı kanalı kullanır: trace tablosunun stream'i her yeni satırı tarayıcına iter.",
+  "stored": "voltaj-ws-connections tablosunda pk = CUST#<kullanıcı>, sk = connectionId, vid ve 2 saatlik TTL var.",
+  "analogy": "Restoranda sıra numarası alırsın ve masana oturursun. Yemek hazır olunca garson seni bulur; sen her dakika mutfağa gidip sormazsın.",
+  "compare": {
+   "title": "Sonucu tarayıcıya iletme yolları",
+   "criteria": ["Gecikme", "Gereksiz istek", "Ek bileşen"],
+   "options": [
+    {"name": "API Gateway WebSocket API", "cells": ["✓ Anında", "✓ Yok", "~ Bağlantı tablosu"]},
+    {"name": "Polling (DescribeExecution)", "cells": ["✕ Aralık kadar", "✕ Çok", "✓ Yok"]},
+    {"name": "AWS AppSync subscriptions", "cells": ["✓ Anında", "✓ Yok", "~ GraphQL API gerekir"]}
+   ],
+   "decision": "REST API zaten var ve GraphQL yok; bu yüzden WebSocket API seçildi.",
+   "sources": [{"title": "API Gateway WebSocket APIs", "url": "https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-websocket-api.html"}, {"title": "Use @connections commands", "url": "https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-how-to-call-websocket-api-connections.html"}]
+  },
+  "try": [{"text": "Checkout yap ve yeşil noktayı izle", "href": "/cart"}],
+  "glossary": [["connectionId", "Her açık WebSocket bağlantısının kimliği."], ["$connect", "Bağlantı açılırken çalışan route."]]
+ },
+ "pipes": {
+  "title": "EventBridge Pipes: 3PL'in cevabı bus'a nasıl girdi?",
+  "summary": "Pipe, RabbitMQ kuyruğunu okur, filtreler ve event'i commerce bus'a yazar; kod yok.",
+  "hero": "Depo (3PL) VPN üzerinden ShipmentDispatched gönderdi. Bu AMQP mesajı nasıl bir EventBridge event'ine dönüştü?",
+  "overview": "pipes",
+  "idea": "3PL'in eski WMS'i sadece AMQP konuşur. Lambda fulfillment FulfillOrder'ı RabbitMQ'ya yazar; WMS VPN üzerinden okur. Cevap shipments.events kuyruğuna gelir. Pipe bu kuyruğu yoklar, filtre (data.type = ShipmentDispatched) uymayan mesajları atar, input template ile event'in detail'ini kurar ve commerce bus'a yazar.",
+  "stored": "RabbitMQ mesajı base64 olarak gelir; Pipes JSON ise otomatik çözer ve filtrelemeye açar. Bus'taki event'in source değeri com.shop.3pl.",
+  "analogy": "Yabancı dil konuşan bir tedarikçi ile ofisin arasında bir tercüman: mektupları okur, ilgisizleri ayırır, kalanları şirketin formuna yazar ve iç posta kutusuna atar.",
+  "compare": {
+   "title": "MQ'dan bus'a köprü seçenekleri",
+   "criteria": ["Kod", "Filtre", "Zenginleştirme"],
+   "options": [
+    {"name": "EventBridge Pipes", "cells": ["✓ Yok", "✓ Event pattern", "✓ İsteğe bağlı enrichment adımı"]},
+    {"name": "Lambda event source mapping + PutEvents", "cells": ["~ Kod gerekir", "✓ ESM filter", "✓ Kodda"]}
+   ],
+   "decision": "Sadece filtre ve şekillendirme gerekiyor; Pipes kodu sıfıra indiriyor. RabbitMQ kaynağında Pipes eşzamanlılığı 5'tir (gerekirse kota artırılır).",
+   "sources": [{"title": "Amazon MQ as a source in EventBridge Pipes", "url": "https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-pipes-mq.html"}, {"title": "Pipes input transformation", "url": "https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-pipes-input-transformation.html"}]
+  },
+  "try": [{"text": "Checkout sonrası kargo adımını izle", "href": "/cart"}],
+  "glossary": [["AMQP", "Mesaj kuyruğu protokolü; RabbitMQ'nun dili."], ["Site-to-Site VPN", "İki ağ arasında internet üzerinden şifreli IPsec tüneli."]]
+ },
+ "notifications": {
+  "title": "SNS → SQS → SES: e-posta nasıl gönderildi?",
+  "summary": "SNS event'i kuyruklara dağıtır, her kanalın kendi kuyruğu ve tüketicisi vardır.",
+  "hero": "Sipariş {orderId} için bir e-posta (ve belki bir SMS) gönderildi. Neden araya kuyruklar konuldu?",
+  "overview": "notifications",
+  "idea": "Bildirim topic'i event'i üç kuyruğa kopyalar: email, sms (filtre: smsOptIn = true) ve back office. Her kanalın hızı ve hatası farklıdır; kuyruk tüketiciyi tamponlar ve hata olursa DLQ'ya düşürür. Lambda email SESv2 SendEmail ile template kullanır; alıcı SES mailbox simulator'dür.",
+  "stored": "Raw message delivery açık olduğu için kuyruktaki body doğrudan EventBridge event JSON'udur (SNS zarfı yok).",
+  "analogy": "Bir duyuru panosu (SNS) ve her bölümün kendi posta kutusu (SQS). Bölümler kutularını kendi hızlarında boşaltır.",
+  "compare": {
+   "title": "Bildirim dağıtma seçenekleri",
+   "criteria": ["Tamponlama", "Kanal başına hata yönetimi", "Filtre"],
+   "options": [
+    {"name": "SNS → SQS → Lambda", "cells": ["✓ Kuyruk", "✓ Kuyruk başına DLQ", "✓ Filter policy"]},
+    {"name": "SNS → Lambda doğrudan", "cells": ["✕", "~ Lambda async retry", "✓"]},
+    {"name": "EventBridge → her Lambda", "cells": ["✕", "~ Kural DLQ'su", "✓"]}
+   ],
+   "decision": "Kanallar bağımsız ölçeklensin ve birinin hatası diğerini etkilemesin diye SNS + SQS seçildi.",
+   "sources": [{"title": "Fanout to Amazon SQS queues", "url": "https://docs.aws.amazon.com/sns/latest/dg/sns-sqs-as-subscriber.html"}, {"title": "SES mailbox simulator", "url": "https://docs.aws.amazon.com/ses/latest/dg/send-an-email-from-console.html"}, {"title": "End User Messaging simulator numbers", "url": "https://docs.aws.amazon.com/sms-voice/latest/userguide/test-phone-numbers.html"}]
+  },
+  "try": [{"text": "Gelen kutusu", "href": "/inbox"}],
+  "glossary": [["Raw message delivery", "SNS'in mesajı zarfsız iletmesi."], ["Mailbox simulator", "SES'in gerçek kutuya gitmeyen test adresleri."]]
+ },
+ "messaging-compare": {
+  "title": "Queue, topic, bus, stream: hangisi ne zaman?",
+  "summary": "SQS, SNS, EventBridge, MQ ve MSK aynı mimaride farklı işler yapıyor.",
+  "hero": "Bu mimaride beş farklı mesajlaşma servisi var. Neden tek biri yetmedi?",
+  "overview": "messaging-compare",
+  "idea": "Kuyruk (SQS) işi bir tüketiciye verir ve tamponlar. Topic (SNS) bir mesajı birçok aboneye iter. Bus (EventBridge) event'leri içeriğe göre kurallarla yönlendirir. Broker (MQ) AMQP gibi standart protokolleri konuşan uygulamalar içindir. Stream (MSK) kalıcı bir log'dur; her tüketici kendi hızında ve kendi offset'inden okur.",
+  "stored": "Büyük resimde son bir saatin event'lerini görüyorsun; her biri bus'tan geçip başka servislere dağıldı.",
+  "analogy": "Kuyruk: bankada sıra numarası. Topic: radyo yayını. Bus: postane ayırma merkezi. Broker: farklı dilleri konuşan santral. Stream: her şeyin kaydedildiği bir defter.",
+  "compare": {
+   "title": "Beş servis, beş iş",
+   "criteria": ["Bu mimarideki görevi"],
+   "options": [
+    {"name": "SQS", "cells": ["Order buffer ve bildirim kuyrukları, her DLQ"]},
+    {"name": "SNS", "cells": ["Bildirimleri e-posta, SMS ve back office kuyruklarına dağıtmak"]},
+    {"name": "EventBridge", "cells": ["Domain event'leri (OrderPlaced...) kurallarla yönlendirmek, archive"]},
+    {"name": "Amazon MQ", "cells": ["AMQP konuşan 3PL WMS ile konuşmak"]},
+    {"name": "MSK", "cells": ["Clickstream ve commerce event log'u, analitik tüketiciler"]}
+   ],
+   "decision": "Her servis güçlü olduğu işte kullanılıyor; event'ler bus'ta buluşuyor.",
+   "sources": [{"title": "AWS messaging services", "url": "https://aws.amazon.com/messaging/"}]
+  },
+  "try": [{"text": "Raporlar", "href": "/reports"}],
+  "glossary": [["Consumer group", "Kafka'da aynı log'u birlikte okuyan tüketiciler; her grup kendi offset'ini tutar."]]
+ },
+ "replay": {
+  "title": "Archive ve replay: geçmiş event'leri yeniden oynatmak",
+  "summary": "Bus archive'ı event'leri saklar; replay onları seçtiğin kurallara tekrar gönderir.",
+  "hero": "Bir tüketici bir saat çalışmasaydı kaçırdığı event'leri nasıl geri alırdı?",
+  "overview": "replay",
+  "idea": "commerce bus'ın archive'ı her event'i 7 gün saklar. StartReplay bir zaman aralığındaki event'leri bus'a tekrar gönderir; FilterArns ile sadece seçtiğin kurallara gider. Bu demoda replay sadece log kuralına gider, böylece e-posta veya 3PL mesajı tekrarlanmaz.",
+  "stored": "Replay edilen event'te replay-name alanı bulunur; tüketiciler gerekirse bunu ayırt edebilir.",
+  "analogy": "Bir maçın kaydını sadece hakem için tekrar oynatmak: oyuncular sahaya yeniden çıkmaz.",
+  "compare": {
+   "title": "Kaçırılan event'leri geri alma",
+   "criteria": ["Kod", "Seçici hedef"],
+   "options": [
+    {"name": "EventBridge archive + replay", "cells": ["✓ Yok", "✓ FilterArns"]},
+    {"name": "MSK offset reset", "cells": ["~ Consumer group yönetimi", "~ Consumer group başına"]},
+    {"name": "SNS FIFO replay", "cells": ["✓ Yok", "✓ Subscription başına (sadece FIFO)"]}
+   ],
+   "decision": "Domain event'leri bus'ta; archive ve replay oraya yerleşik.",
+   "sources": [{"title": "Archiving and replaying events", "url": "https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-archive.html"}]
+  },
+  "try": [{"text": "Raporlar → Events → Replay", "href": "/reports"}],
+  "glossary": [["Archive", "Bus'a gelen event'lerin saklandığı yer."]]
+ },
+ "schema-registry": {
+  "title": "Schema registry: event'lerin şekli nerede yazıyor?",
+  "summary": "Schema discovery bus'taki event'lerden otomatik OpenAPI şeması çıkarır.",
+  "hero": "OrderPlaced'in hangi alanları var? Bunu bir belgeden mi öğreniyoruz, yoksa event'lerin kendisinden mi?",
+  "overview": "schema-registry",
+  "idea": "commerce bus'ta schema discovery açık. EventBridge yeni bir event şekli görünce discovered-schemas registry'sine bir şema yazar ve sürüm numarası verir. Tüketiciler bu şemadan kod bağlamaları (code bindings) üretebilir.",
+  "stored": "Şema OpenAPI 3 formatında: detail'in alanları ve tipleri.",
+  "analogy": "Bir arşivci gelen her yeni form türünün boş bir örneğini dosyalar; sonra gelen herkes formun alanlarını oradan öğrenir.",
+  "compare": {
+   "title": "Event şekillerini belgeleme",
+   "criteria": ["Güncel kalma", "Emek"],
+   "options": [
+    {"name": "EventBridge schema discovery", "cells": ["✓ Gerçek event'lerden", "✓ Otomatik"]},
+    {"name": "Wiki / elle yazılan belge", "cells": ["✕ Eskiyebilir", "✕ Elle"]}
+   ],
+   "decision": "Discovery açık; şemalar raporlar sayfasında görünür.",
+   "sources": [{"title": "Amazon EventBridge schema registry", "url": "https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-schema.html"}]
+  },
+  "try": [{"text": "Raporlar → Schemas", "href": "/reports"}],
+  "glossary": [["Schema", "Bir event'in alanlarının ve tiplerinin tanımı."]]
+ },
+ "upload-resize": {
+  "title": "Presigned upload → S3 event → resize",
+  "summary": "Tarayıcı dosyayı doğrudan S3'e koyar; S3 event'i EventBridge üzerinden resize fonksiyonunu başlatır.",
+  "hero": "Bir görsel yükledin ve birkaç saniye sonra üç boyutu CloudFront'tan geldi. Dosya hiç Lambda'dan geçti mi?",
+  "overview": "upload-resize",
+  "idea": "Ürün fonksiyonu 5 dakikalık bir presigned URL imzalar. Tarayıcı dosyayı bu URL ile doğrudan uploads bucket'ına PUT eder. Bucket Object Created event'ini default bus'a gönderir; image-uploaded kuralı resize fonksiyonunu çağırır. Fonksiyon sm, md, lg WebP dosyalarını web bucket'ına yazar; CloudFront OAC ile sunar.",
+  "stored": "Orijinal dosya uploads bucket'ında (KMS ile şifreli, 7 gün sonra silinir). Boyutlar web bucket'ında images/<sku>/ altında.",
+  "analogy": "Kargo firmasına kendi paketini bırakmak için bir randevu kodu almak: firma kodu verir, paketi sen doğrudan depoya götürürsün.",
+  "compare": {
+   "title": "Dosya yükleme yolları",
+   "criteria": ["Lambda yükü", "Boyut sınırı"],
+   "options": [
+    {"name": "Presigned URL ile S3'e doğrudan", "cells": ["✓ Dosya Lambda'dan geçmez", "✓ S3 sınırları"]},
+    {"name": "API Gateway + Lambda üzerinden", "cells": ["✕ Her bayt Lambda'dan geçer", "✕ API Gateway payload sınırı"]}
+   ],
+   "decision": "Presigned URL, büyük dosyaları API katmanından uzak tutar.",
+   "sources": [{"title": "Uploading objects with presigned URLs", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/PresignedUrlUploadObject.html"}, {"title": "Using EventBridge with S3", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/EventBridge.html"}]
+  },
+  "try": [{"text": "Back office → görsel yükle", "href": "/admin"}],
+  "glossary": [["Presigned URL", "Sınırlı süre için belirli bir işlemi izinli kılan imzalı URL."], ["OAC", "Origin Access Control: S3'ü sadece CloudFront'a açar."]]
+ },
+ "clickstream": {
+  "title": "Clickstream → MSK → data lake ve sayaçlar",
+  "summary": "Tıklamalar Kafka'ya yazılır; iki consumer group aynı veriyi farklı işler için okur.",
+  "hero": "Bu sayfada yaptığın tıklamalar nereye gitti ve “Popular now” listesini nasıl değiştirdi?",
+  "overview": "clickstream",
+  "idea": "Tarayıcı tıklamaları biriktirir ve /api/events'e gönderir. VPC içindeki producer fonksiyonu IAM kimlik doğrulamasıyla MSK Serverless'taki clickstream topic'ine yazar. İki event source mapping (provisioned mode) aynı topic'i okur: archive grubu gzip JSON dosyalarını S3 data lake'e yazar, counters grubu DynamoDB'de ürün görüntülemelerini ADD ile sayar.",
+  "stored": "Data lake'te topic/dt=YYYY-MM-DD/hour=HH/part-*.json.gz bölümleme ile dosyalar var. Büyük resimde dosyaları görürsün; birine tıklayınca içindeki kayıtları.",
+  "analogy": "Bir mağazanın giriş kapısındaki sayaç ve güvenlik kamerası kaydı: aynı hareketi biri sayar, diğeri arşivler.",
+  "compare": {
+   "title": "Clickstream için seçenekler",
+   "criteria": ["Birden çok bağımsız tüketici", "Yeniden okuma", "Sunucu yönetimi"],
+   "options": [
+    {"name": "Amazon MSK Serverless", "cells": ["✓ Consumer group'lar", "✓ Offset", "✓ Kapasite yönetimi yok"]},
+    {"name": "Kinesis Data Streams", "cells": ["✓ Birden çok tüketici", "✓ Saklama süresi içinde", "✓ On-demand mod"]},
+    {"name": "SQS", "cells": ["✕ Mesajı bir tüketici alır", "✕", "✓"]}
+   ],
+   "decision": "Pazarlama ekibi Kafka ekosistemini kullanıyor; bu yüzden MSK Serverless seçildi. Kinesis de geçerli bir seçenekti.",
+   "sources": [{"title": "MSK Serverless", "url": "https://docs.aws.amazon.com/msk/latest/developerguide/serverless.html"}, {"title": "Lambda with Amazon MSK", "url": "https://docs.aws.amazon.com/lambda/latest/dg/with-msk.html"}]
+  },
+  "try": [{"text": "Raporlar → Clickstream → 500 tıklama", "href": "/reports"}],
+  "glossary": [["Topic", "Kafka'da kayıtların yazıldığı adlandırılmış log."], ["Offset", "Bir kaydın partition içindeki sıra numarası."], ["Consumer lag", "Tüketicinin en son kayda göre ne kadar geride olduğu."]]
+ },
+ "cognito": {
+  "title": "Cognito grupları ve authorizer",
+  "summary": "Kullanıcı Cognito'ya giriş yapar; API Gateway her istekte ID token'ı kontrol eder.",
+  "hero": "{name} olarak giriş yaptın. Sepete eklerken API kim olduğunu nasıl bildi?",
+  "overview": "cognito",
+  "idea": "Persona'lar gerçek Cognito kullanıcıları. Tarayıcı InitiateAuth ile token alır (demo admin için ikinci adım TOTP). Her korumalı istekte Authorization başlığındaki ID token'ı API Gateway Cognito authorizer'ı doğrular; Lambda kimliği claims.sub olarak alır. Admin API'leri cognito:groups içinde admins arar.",
+  "stored": "Büyük resimde user pool'daki kullanıcıları gruplarıyla görürsün; birine tıklayınca attribute'ları (şifre asla görünmez).",
+  "analogy": "Bir binanın girişinde kimlik kartı alırsın; her kattaki kapı kartı okur ve hangi gruba ait olduğuna göre açılır.",
+  "compare": {
+   "title": "API'yi koruma seçenekleri",
+   "criteria": ["Kod", "Grup kontrolü"],
+   "options": [
+    {"name": "Cognito user pool authorizer", "cells": ["✓ Kod yok", "~ Grup kontrolü Lambda'da (claims)"]},
+    {"name": "Lambda authorizer", "cells": ["~ Kod gerekir", "✓ İstediğin kural"]},
+    {"name": "IAM (SigV4)", "cells": ["✓", "~ Tarayıcı için kimlik havuzu gerekir"]}
+   ],
+   "decision": "REST API Cognito authorizer kullanır; WebSocket $connect için Lambda authorizer var.",
+   "sources": [{"title": "Control access to REST APIs using Cognito user pools", "url": "https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-integrate-with-cognito.html"}]
+  },
+  "try": [{"text": "Persona değiştir", "href": "/"}, {"text": "Demo admin ile MFA", "href": "/admin"}],
+  "glossary": [["ID token", "Kullanıcının kim olduğunu söyleyen imzalı JWT."], ["TOTP", "Zaman tabanlı tek kullanımlık kod."]]
+ },
+ "edge": {
+  "title": "CloudFront + WAF + OAC: istek mağazaya nasıl ulaştı?",
+  "summary": "Tek alan adı: CloudFront SPA'yı S3'ten, /api/* isteklerini API Gateway'den getirir; WAF önde.",
+  "hero": "shop.tdsynnexlab.link'i açtın. Sayfa ve API aynı alan adından geldi. Arada neler var?",
+  "overview": "edge",
+  "idea": "Route 53 alias kaydı CloudFront'u gösterir. WAF rate limit ve managed kuralları CloudFront'ta uygular. Varsayılan davranış S3 web bucket'ından OAC ile okur (bucket herkese kapalı). /api/* davranışı önbelleksiz olarak API Gateway'e gider; bir CloudFront Function /api önekini kaldırır.",
+  "stored": "Büyük resimde web bucket'taki ürün görselleri var; CloudFront bunları önbelleğe alır.",
+  "analogy": "Bir alışveriş merkezinin tek ana kapısı: güvenlik (WAF) kapıda, vitrinler (S3) ve kasalar (API) içeride.",
+  "compare": {
+   "title": "Tek alan adı neden?",
+   "criteria": ["CORS", "WAF", "Önbellek"],
+   "options": [
+    {"name": "CloudFront: SPA + /api/*", "cells": ["✓ Aynı origin, CORS yok", "✓ Tek yerde", "✓ Statik dosyalar için"]},
+    {"name": "Ayrı API alan adı", "cells": ["✕ CORS gerekir", "~ İki yerde", "~"]}
+   ],
+   "decision": "Tek origin hem güvenliği hem de tarayıcı tarafını basitleştiriyor.",
+   "sources": [{"title": "Restricting access to an S3 origin (OAC)", "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-restricting-access-to-s3.html"}, {"title": "AWS WAF rate-based rules", "url": "https://docs.aws.amazon.com/waf/latest/developerguide/waf-rule-statement-type-rate-based.html"}]
+  },
+  "try": [{"text": "Ana sayfa", "href": "/"}],
+  "glossary": [["OAC", "Origin Access Control."], ["Behavior", "CloudFront'ta bir yol desenine göre origin ve önbellek ayarı."]]
+ },
+ "aurora": {
+  "title": "Aurora ve RDS Proxy: sipariş neden ilişkisel veritabanında?",
+  "summary": "Sipariş ve satırları tek transaction'da yazılır; Lambda RDS Proxy üzerinden IAM ile bağlanır.",
+  "hero": "Sipariş {orderId} Aurora PostgreSQL'e yazıldı. Neden DynamoDB değil, ve Lambda bağlantıyı nasıl açtı?",
+  "overview": "aurora",
+  "idea": "Siparişler, satırlar ve müşteriler raporlama için ilişkisel. order fonksiyonu VPC içinde çalışır; 15 dakikalık bir IAM token üretir ve RDS Proxy'ye TLS ile bağlanır. Proxy bağlantıları havuzda tutar, böylece binlerce Lambda çağrısı veritabanını boğmaz. BEGIN, INSERT orders, INSERT order_lines, COMMIT tek transaction'dır.",
+  "stored": "Büyük resimde orders tablosunun satırlarını görürsün; birine tıklayınca satırlarıyla birlikte.",
+  "analogy": "Bir otelin resepsiyonu (proxy): misafirler (Lambda) sürekli gelir gider, ama oda anahtarları (bağlantılar) sınırlı ve resepsiyon onları dağıtır.",
+  "compare": {
+   "title": "Lambda'dan ilişkisel veritabanına bağlanma",
+   "criteria": ["Bağlantı patlaması", "Şifre yönetimi"],
+   "options": [
+    {"name": "RDS Proxy + IAM auth", "cells": ["✓ Havuz", "✓ Şifre yok, token var"]},
+    {"name": "Doğrudan bağlantı", "cells": ["✕ Her çağrı bir bağlantı", "~ Secrets Manager"]},
+    {"name": "RDS Data API", "cells": ["✓ HTTP", "✓ IAM"]}
+   ],
+   "decision": "Mimari RDS Proxy ile kararlaştırıldı; Data API da geçerli bir alternatif.",
+   "sources": [{"title": "Amazon RDS Proxy", "url": "https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/rds-proxy.html"}, {"title": "IAM authentication for RDS Proxy", "url": "https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/rds-proxy-setup.html"}]
+  },
+  "try": [{"text": "Siparişlerim", "href": "/orders"}],
+  "glossary": [["Transaction", "Ya hepsi ya hiçbiri yapılan işlem grubu."], ["RDS Proxy", "Veritabanı bağlantılarını havuzlayan yönetilen proxy."]]
+ }
+}

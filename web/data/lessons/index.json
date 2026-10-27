@@ -1,0 +1,93 @@
+[
+ {
+  "id": "edge",
+  "title": "CloudFront + WAF + OAC: istek mağazaya nasıl ulaştı?",
+  "summary": "Tek alan adı: CloudFront SPA'yı S3'ten, /api/* isteklerini API Gateway'den getirir; WAF önde."
+ },
+ {
+  "id": "cognito",
+  "title": "Cognito grupları ve authorizer",
+  "summary": "Kullanıcı Cognito'ya giriş yapar; API Gateway her istekte ID token'ı kontrol eder."
+ },
+ {
+  "id": "zero-etl",
+  "title": "Zero-ETL: DynamoDB'deki ürün OpenSearch'te nasıl aranabilir oldu?",
+  "summary": "DynamoDB stream'i OpenSearch Ingestion pipeline'ı ile index'e kopyalanır; kimse kod yazmaz."
+ },
+ {
+  "id": "ddb-conditional",
+  "title": "DynamoDB koşullu yazma: stok neden eksiye düşmez?",
+  "summary": "ConditionExpression yazmayı sadece koşul doğruysa yapar; transaction birden çok satırı birlikte yazar."
+ },
+ {
+  "id": "saga",
+  "title": "Saga ve compensation: ödeme başarısız olursa stok ne olur?",
+  "summary": "Step Functions Standard iş akışı adım adım ilerler, hata olursa yaptığı adımları geri alır."
+ },
+ {
+  "id": "task-token",
+  "title": "Task token ile callback: iş akışı webhook'u nasıl bekliyor?",
+  "summary": "Step Functions bir token verir ve durur; webhook gelince SendTaskSuccess ile devam eder."
+ },
+ {
+  "id": "websocket",
+  "title": "WebSocket push: sonuç sayfaya nasıl geldi?",
+  "summary": "API Gateway WebSocket API açık bir bağlantı tutar; Lambda @connections ile mesaj gönderir."
+ },
+ {
+  "id": "fanout",
+  "title": "Pub/sub fan-out: OrderPlaced herkese nasıl ulaştı?",
+  "summary": "Tek bir event, EventBridge kurallarıyla SNS'e, SQS kuyruğuna ve Kafka log'una aynı anda gider.",
+  "sample": true
+ },
+ {
+  "id": "messaging-compare",
+  "title": "Queue, topic, bus, stream: hangisi ne zaman?",
+  "summary": "SQS, SNS, EventBridge, MQ ve MSK aynı mimaride farklı işler yapıyor."
+ },
+ {
+  "id": "idempotency",
+  "title": "Idempotency ve at-least-once: aynı event iki kez gelirse?",
+  "summary": "Her tüketici event başına bir anahtar yazar; ikinci teslimatta koşul başarısız olur ve iş tekrar yapılmaz."
+ },
+ {
+  "id": "dlq",
+  "title": "Retry, DLQ ve redrive: tüketici bozulursa mesaj kaybolur mu?",
+  "summary": "SQS mesajı birkaç kez dener, sonra dead-letter queue'ya taşır; düzeltince redrive ile geri gönderirsin."
+ },
+ {
+  "id": "replay",
+  "title": "Archive ve replay: geçmiş event'leri yeniden oynatmak",
+  "summary": "Bus archive'ı event'leri saklar; replay onları seçtiğin kurallara tekrar gönderir."
+ },
+ {
+  "id": "schema-registry",
+  "title": "Schema registry: event'lerin şekli nerede yazıyor?",
+  "summary": "Schema discovery bus'taki event'lerden otomatik OpenAPI şeması çıkarır."
+ },
+ {
+  "id": "pipes",
+  "title": "EventBridge Pipes: 3PL'in cevabı bus'a nasıl girdi?",
+  "summary": "Pipe, RabbitMQ kuyruğunu okur, filtreler ve event'i commerce bus'a yazar; kod yok."
+ },
+ {
+  "id": "notifications",
+  "title": "SNS → SQS → SES: e-posta nasıl gönderildi?",
+  "summary": "SNS event'i kuyruklara dağıtır, her kanalın kendi kuyruğu ve tüketicisi vardır."
+ },
+ {
+  "id": "upload-resize",
+  "title": "Presigned upload → S3 event → resize",
+  "summary": "Tarayıcı dosyayı doğrudan S3'e koyar; S3 event'i EventBridge üzerinden resize fonksiyonunu başlatır."
+ },
+ {
+  "id": "clickstream",
+  "title": "Clickstream → MSK → data lake ve sayaçlar",
+  "summary": "Tıklamalar Kafka'ya yazılır; iki consumer group aynı veriyi farklı işler için okur."
+ },
+ {
+  "id": "aurora",
+  "title": "Aurora ve RDS Proxy: sipariş neden ilişkisel veritabanında?",
+  "summary": "Sipariş ve satırları tek transaction'da yazılır; Lambda RDS Proxy üzerinden IAM ile bağlanır."
+ }
+]

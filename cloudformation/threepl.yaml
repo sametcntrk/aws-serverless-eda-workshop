@@ -1,0 +1,127 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 3PL network simulator - a separate VPC (172.16.0.0/16) with one EC2 instance as VPN customer gateway (Libreswan) and the WMS (AMQP client).
+Parameters:
+  Network: {Type: String, Default: voltaj-network}
+  Integration: {Type: String, Default: voltaj-integration}
+  Base: {Type: String, Default: voltaj-base}
+  CodeBucket: {Type: String}
+  CodePrefix: {Type: String, Default: threepl}
+  ImageId: {Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>', Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64}
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 172.16.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags: [{Key: Name, Value: voltaj-3pl-vpc}]
+  Igw:
+    Type: AWS::EC2::InternetGateway
+    Properties: {Tags: [{Key: Name, Value: voltaj-3pl-igw}]}
+  IgwAttach:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties: {VpcId: !Ref Vpc, InternetGatewayId: !Ref Igw}
+  Subnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 172.16.10.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags: [{Key: Name, Value: voltaj-3pl-public}]
+  Rt:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{Key: Name, Value: rtb-voltaj-3pl}]
+  RtDefault:
+    Type: AWS::EC2::Route
+    DependsOn: IgwAttach
+    Properties: {RouteTableId: !Ref Rt, DestinationCidrBlock: 0.0.0.0/0, GatewayId: !Ref Igw}
+  RtAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: {SubnetId: !Ref Subnet, RouteTableId: !Ref Rt}
+  Sg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: voltaj-3pl-cgw
+      GroupDescription: 3PL customer gateway - IPsec from AWS (UDP 500, 4500), all from the shop VPC through the tunnel
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - {IpProtocol: udp, FromPort: 500, ToPort: 500, CidrIp: 0.0.0.0/0}
+        - {IpProtocol: udp, FromPort: 4500, ToPort: 4500, CidrIp: 0.0.0.0/0}
+        - {IpProtocol: '-1', CidrIp: 10.0.0.0/16}
+      Tags: [{Key: Name, Value: sg-voltaj-3pl-cgw}]
+  Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: voltaj-3pl-wms
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement: [{Effect: Allow, Principal: {Service: ec2.amazonaws.com}, Action: sts:AssumeRole}]
+      ManagedPolicyArns: [arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore]
+      Policies:
+        - PolicyName: wms
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - {Effect: Allow, Action: ec2:DescribeVpnConnections, Resource: '*'}
+              - {Effect: Allow, Action: secretsmanager:GetSecretValue, Resource: {'Fn::ImportValue': !Sub '${Base}-ThreePlSecretArn'}}
+              - {Effect: Allow, Action: [kms:Decrypt, kms:GenerateDataKey], Resource: {'Fn::ImportValue': !Sub '${Base}-KeyArn'}}
+              - {Effect: Allow, Action: dynamodb:PutItem, Resource: !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/voltaj-trace'}
+              - {Effect: Allow, Action: s3:GetObject, Resource: !Sub 'arn:aws:s3:::${CodeBucket}/${CodePrefix}/*'}
+  Profile:
+    Type: AWS::IAM::InstanceProfile
+    Properties: {Roles: [!Ref Role]}
+  Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref ImageId
+      InstanceType: t4g.small
+      IamInstanceProfile: !Ref Profile
+      SubnetId: !Ref Subnet
+      SecurityGroupIds: [!Ref Sg]
+      SourceDestCheck: false
+      MetadataOptions: {HttpTokens: required}
+      Tags: [{Key: Name, Value: voltaj-3pl-wms}]
+      UserData:
+        Fn::Base64: !Sub
+          - |
+            #!/bin/bash
+            set -euxo pipefail
+            dnf install -y libreswan python3-pip
+            pip3 install pika boto3
+            mkdir -p /opt/wms
+            aws s3 cp s3://${CodeBucket}/${CodePrefix}/vpn.py /opt/wms/vpn.py
+            aws s3 cp s3://${CodeBucket}/${CodePrefix}/wms.py /opt/wms/wms.py
+            TOKEN=$(curl -s -X PUT http://169.254.169.254/latest/api/token -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+            PRIV=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/local-ipv4)
+            python3 /opt/wms/vpn.py ${VpnId} ${Eip} $PRIV
+            sysctl -w net.ipv4.ip_forward=1
+            systemctl enable --now ipsec
+            HOST=$(echo "${Amqp}" | sed 's#.*//##; s#:.*##')
+            echo "{\"host\": \"$HOST\", \"secret\": \"${Secret}\"}" > /etc/wms.json
+            cat > /etc/systemd/system/wms.service <<'UNIT'
+            [Unit]
+            Description=3PL WMS simulator
+            After=network-online.target ipsec.service
+            [Service]
+            ExecStart=/usr/bin/python3 /opt/wms/wms.py
+            Restart=always
+            RestartSec=10
+            [Install]
+            WantedBy=multi-user.target
+            UNIT
+            systemctl daemon-reload
+            systemctl enable --now wms
+          - VpnId: {'Fn::ImportValue': !Sub '${Network}-VpnId'}
+            Eip: {'Fn::ImportValue': !Sub '${Network}-ThreePlEip'}
+            Amqp: {'Fn::ImportValue': !Sub '${Integration}-AmqpEndpoint'}
+            Secret: {'Fn::ImportValue': !Sub '${Base}-ThreePlSecretArn'}
+  EipAssoc:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      InstanceId: !Ref Instance
+      AllocationId: {'Fn::ImportValue': !Sub '${Network}-ThreePlEipAlloc'}
+Outputs:
+  InstanceId: {Value: !Ref Instance}

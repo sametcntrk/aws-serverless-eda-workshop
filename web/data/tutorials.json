@@ -1,0 +1,46 @@
+{
+ "home": {"steps": [
+  {"title": "Welcome to Voltaj", "text": "Voltaj is a demo shop on a real AWS architecture in Frankfurt. Use it like a normal shop. The violet parts are the learning layer. The shop itself never uses violet.", "target": "#hero"},
+  {"title": "The Behind the scenes panel", "text": "Each action adds a numbered call to the panel on the right. Each entry is one real AWS call: the service, the operation, the request, the time, the network path and the cost when we know it.", "target": "#bts"},
+  {"title": "Step badges link to the diagram", "text": "A badge such as P2 · S3 · 4 means: diagram page 2, scenario 3, step 4. Click the badge to open the architecture diagram at that step.", "target": "#bts"},
+  {"title": "Popular products come from Kafka", "text": "Your clicks go to Amazon MSK. A consumer group counts the views in DynamoDB. This list reads the counters. Open a product, then come back later: the counts change.", "target": "#popular"},
+  {"title": "Choose a persona", "text": "A persona is a real Cognito user with an order history. Choose one to use the cart and the checkout. Your own cart stays separate from other visitors.", "target": "#persona-chip"}
+ ]},
+ "search": {"steps": [
+  {"title": "Search runs in OpenSearch Serverless", "text": "The product function sends a multi_match query to the collection voltaj-search. Then it reads the live price and stock from two DynamoDB tables with one BatchGetItem.", "target": "#results"},
+  {"title": "Try the fuzzy experiment", "text": "Search for a word with a typing error, for example hedphones. Turn fuzzy matching off and search again. Compare the request text in the panel.", "target": "#exp-fuzzy"},
+  {"title": "Where does the index come from?", "text": "Nobody writes to OpenSearch directly. The zero-ETL integration copies each catalog change from the DynamoDB stream to the index. Click 101 on the Search entry to see the document next to the DynamoDB item.", "target": "#bts"}
+ ]},
+ "product": {"steps": [
+  {"title": "One GetItem, one BatchGetItem", "text": "The page reads the product item from the catalog table, then the price and the available stock. The panel shows the read capacity and the cost of each call.", "target": "#bts"},
+  {"title": "Add to cart", "text": "Choose a quantity and add the product. The Cognito authorizer checks your token before the cart function runs. A line can have at most 5 pieces: a condition in UpdateItem stops more.", "target": "#buy"}
+ ]},
+ "cart": {"steps": [
+  {"title": "The cart is in DynamoDB", "text": "Each line is one item with the key CART#<persona>~<visitor> and a TTL of 7 days. DynamoDB deletes old carts by itself.", "target": "#view"},
+  {"title": "Checkout starts a saga", "text": "API Gateway starts the Step Functions workflow directly, without a Lambda function, and answers at once. The work continues in the background. The panel keeps adding entries.", "target": "#checkout"}
+ ]},
+ "checkout": {"steps": [
+  {"title": "Follow the saga", "text": "Each step on this page comes from a live trace entry. The workflow reserved the stock in one DynamoDB transaction and created a payment at VoltPay.", "target": "#progress"},
+  {"title": "Pay, decline or wait", "text": "Open VoltPay. Pay sends a signed webhook and the order continues. Decline or No answer starts the compensation: the stock goes back and PaymentFailed goes to the bus.", "target": "#pay-row"},
+  {"title": "Events after the response", "text": "After the confirmation, OrderPlaced fans out: SNS for email and SMS, the order buffer for the 3PL, and the commerce log in Kafka. These entries arrive later, also minutes later for the shipment.", "target": "#bts"},
+  {"title": "Send the same event twice", "text": "Delivery is at least once. Send OrderPlaced again and watch each consumer stop at its idempotency key.", "target": "#exp-dup"}
+ ]},
+ "orders": {"steps": [
+  {"title": "Orders are relational", "text": "The order function writes orders and order lines to Aurora PostgreSQL in one transaction. It connects through RDS Proxy with a 15-minute IAM token, not a password.", "target": "#view"}
+ ]},
+ "inbox": {"steps": [
+  {"title": "Simulated email and SMS", "text": "SES sends to the mailbox simulator and End User Messaging sends to a simulator number. The calls are real, but no real person gets a message. This page shows what was sent.", "target": "#msgs"}
+ ]},
+ "admin": {"steps": [
+  {"title": "The admins group and MFA", "text": "The back office needs a Cognito user in the group admins. The demo admin has a TOTP authenticator. The page computes the code, and the panel shows the MFA challenge.", "target": "#view"},
+  {"title": "Save a product, then search for it", "text": "The save is one PutItem. About ten seconds later the zero-ETL pipeline has indexed it. Search for the name to see the change in OpenSearch.", "target": "#product-form"},
+  {"title": "Upload an image", "text": "The browser puts the file directly in S3 with a presigned URL. S3 starts the resize through EventBridge. The new image appears when the resize entry arrives.", "target": "#image-form"}
+ ]},
+ "reports": {"steps": [
+  {"title": "The analytic side", "text": "These reports read Step Functions executions, the event log, queue depth, MSK consumer lag, the data lake and the counters.", "target": "#tabs"},
+  {"title": "Experiments with limits", "text": "Break a consumer and redrive the DLQ, replay events from the archive, or send a capped burst. Each experiment has a limit per hour to protect the cost.", "target": "#tab"}
+ ]},
+ "lessons": {"steps": [
+  {"title": "101 lessons in Turkish", "text": "Each lesson explains one pattern for beginners. A lesson opened from a panel entry shows your own call and your own data.", "target": "#view"}
+ ]}
+}

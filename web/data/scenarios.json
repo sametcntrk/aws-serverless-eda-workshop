@@ -1,0 +1,1361 @@
+{
+ "colors": [
+  "#007CBD",
+  "#ED7100",
+  "#7AA116",
+  "#C925D1",
+  "#3F8624",
+  "#E7157B",
+  "#00A4A6",
+  "#545B64"
+ ],
+ "names": {
+  "users-customer": "Customer",
+  "users-admin": "Admin",
+  "ext-payment": "Payment provider",
+  "users-inbox": "Customer inbox/phone",
+  "onprem-3pl": "3PL WMS",
+  "r53": "Route 53",
+  "cf": "CloudFront",
+  "waf": "WAF",
+  "wsapi": "WebSocket API",
+  "s3web": "S3 web bucket",
+  "cognito": "Cognito",
+  "s3up": "S3 uploads bucket",
+  "lws": "Lambda ws",
+  "apigw": "REST API",
+  "busdef": "Default bus",
+  "aoss": "OpenSearch",
+  "lprod": "Lambda product",
+  "lcart": "Lambda cart",
+  "lhook": "Lambda webhook",
+  "lresize": "Lambda resize",
+  "osis": "OpenSearch Ingestion",
+  "ddb": "DynamoDB",
+  "sfn": "Step Functions",
+  "sns": "SNS topic",
+  "eb": "Bus commerce",
+  "pipes": "Pipe",
+  "sqsmail": "SQS email",
+  "sqssms": "SQS sms",
+  "sqsbo": "SQS back office",
+  "sqsbuf": "SQS order buffer",
+  "lmail": "Lambda email",
+  "lsms": "Lambda sms",
+  "dlq": "SQS DLQ",
+  "lcount": "Lambda counters",
+  "ses": "SES",
+  "eum": "End User Messaging",
+  "larch": "Lambda archive",
+  "s3lake": "S3 data lake",
+  "lpay": "Lambda payment",
+  "proxy": "RDS Proxy",
+  "lorder": "Lambda order",
+  "lful": "Lambda fulfillment",
+  "lprodc": "Lambda producer",
+  "msk": "MSK",
+  "igw": "Internet gateway",
+  "vgw": "Virtual private gateway",
+  "nata": "NAT gateway a",
+  "mqa": "MQ node a",
+  "aura": "Aurora writer"
+ },
+ "pages": [
+  {
+   "page": 1,
+   "name": "1 Overview",
+   "title": "E-commerce on AWS - serverless core and event-driven backbone (overview)",
+   "sub": "One account (179330777878), Frankfurt (eu-central-1), three AZs. Layers top to bottom: global edge, API, microservices, orchestration and events, data, VPC. Blue numbers show the main customer journey. Grey arrows show all other connections.",
+   "scenarios": []
+  },
+  {
+   "page": 2,
+   "name": "2 Customer (synchronous)",
+   "title": "Page 2 - Customer flows (synchronous): SPA, sign-in, search, cart, WebSocket, checkout start",
+   "sub": "The customer browser starts every flow on this page. Grey components are not part of these flows.",
+   "scenarios": [
+    {
+     "id": "p2s1",
+     "no": 1,
+     "color": "#007CBD",
+     "title": "Scenario 1 - The browser loads the SPA",
+     "who": "The customer browser starts this flow. It needs the static files of the single-page application (SPA).",
+     "needs": "",
+     "steps": [
+      {
+       "label": "1",
+       "src": "users-customer",
+       "tgt": "r53",
+       "title": "DNS lookup",
+       "text": "The browser asks for shop.tdsynnexlab.link. Route 53 answers with an alias record that points to the CloudFront distribution.",
+       "card": [
+        "DNS query: shop.tdsynnexlab.link (A, AAAA)",
+        "Answer: alias to dxxxx.cloudfront.net"
+       ]
+      },
+      {
+       "label": "2",
+       "src": "users-customer",
+       "tgt": "cf",
+       "title": "HTTPS request",
+       "text": "The browser sends GET / over HTTPS. AWS WAF checks the request at CloudFront. CloudFront sends a cached copy when it has one.",
+       "card": [
+        "HTTPS GET /",
+        "Host: shop.tdsynnexlab.link",
+        "TLS certificate: ACM in us-east-1"
+       ]
+      },
+      {
+       "label": "3",
+       "src": "cf",
+       "tgt": "s3web",
+       "title": "Origin request on a cache miss",
+       "text": "CloudFront signs the request with origin access control (OAC). Only CloudFront can read the bucket. Return path: S3 → CloudFront → browser.",
+       "card": [
+        "S3 GetObject /index.html",
+        "Authorization: SigV4 (OAC)",
+        "Response: 200 with Cache-Control"
+       ]
+      }
+     ]
+    },
+    {
+     "id": "p2s2",
+     "no": 2,
+     "color": "#ED7100",
+     "title": "Scenario 2 - The customer signs in",
+     "who": "The customer browser starts this flow. It needs tokens for the protected APIs.",
+     "needs": "",
+     "steps": [
+      {
+       "label": "1",
+       "src": "users-customer",
+       "tgt": "cognito",
+       "title": "Sign-in",
+       "text": "The SPA sends the email and the password to the Cognito user pool with SRP. Cognito asks for MFA when the customer turned it on. Return path: Cognito sends the ID, access and refresh tokens (JWT) to the browser.",
+       "card": [
+        "InitiateAuth USER_SRP_AUTH",
+        "USERNAME = email, SRP_A",
+        "Result: IdToken, AccessToken, RefreshToken"
+       ]
+      }
+     ]
+    },
+    {
+     "id": "p2s3",
+     "no": 3,
+     "color": "#7AA116",
+     "title": "Scenario 3 - The customer searches for products",
+     "who": "The customer browser starts this flow. Search is public and needs no token.",
+     "needs": "Needs: Scenario 1 (the SPA runs in the browser).",
+     "steps": [
+      {
+       "label": "1",
+       "src": "users-customer",
+       "tgt": "cf",
+       "title": "Search request",
+       "text": "The SPA sends GET /api/products?q=laptop. WAF checks the request. The /api/* cache behavior sends it to the REST API origin.",
+       "card": [
+        "HTTPS GET /api/products?q=laptop&page=1",
+        "Host: shop.tdsynnexlab.link"
+       ]
+      },
+      {
+       "label": "2",
+       "src": "cf",
+       "tgt": "apigw",
+       "title": "Origin request",
+       "text": "CloudFront sends the request to the regional REST API. The request validator checks the query parameters.",
+       "card": [
+        "HTTPS GET /prod/products?q=laptop",
+        "X-Forwarded-For: client IP"
+       ]
+      },
+      {
+       "label": "3",
+       "src": "apigw",
+       "tgt": "lprod",
+       "title": "Lambda proxy integration",
+       "text": "API Gateway invokes the product function. The event contains the full request.",
+       "card": [
+        "Lambda event (proxy)",
+        "httpMethod GET, path /products",
+        "queryStringParameters.q = laptop"
+       ]
+      },
+      {
+       "label": "4",
+       "src": "lprod",
+       "tgt": "aoss",
+       "title": "Full-text search",
+       "text": "The function sends a search query to the products index. The index returns the matching SKUs.",
+       "card": [
+        "POST /products/_search",
+        "match name: laptop, size 20",
+        "SigV4 (service aoss)"
+       ]
+      },
+      {
+       "label": "5",
+       "src": "lprod",
+       "tgt": "ddb",
+       "title": "Current price and stock",
+       "text": "The function reads price and stock for the SKUs with BatchGetItem. Return path: Lambda → API Gateway → CloudFront → browser.",
+       "card": [
+        "BatchGetItem table catalog",
+        "Keys: PK = SKU#123, ...",
+        "ProjectionExpression price, stock"
+       ]
+      }
+     ]
+    },
+    {
+     "id": "p2s4",
+     "no": 4,
+     "color": "#C925D1",
+     "title": "Scenario 4 - The customer adds an item to the cart",
+     "who": "The signed-in customer starts this flow.",
+     "needs": "Needs: Scenario 2 (the ID token).",
+     "steps": [
+      {
+       "label": "1",
+       "src": "users-customer",
+       "tgt": "cf",
+       "title": "Cart request",
+       "text": "The SPA sends POST /api/cart/items. The Authorization header carries the ID token.",
+       "card": [
+        "HTTPS POST /api/cart/items",
+        "Authorization: Bearer &lt;ID token&gt;",
+        "body {sku: SKU#123, qty: 1}"
+       ]
+      },
+      {
+       "label": "2",
+       "src": "cf",
+       "tgt": "apigw",
+       "title": "Token check",
+       "text": "The Cognito authorizer checks the signature and the expiry of the JWT. The request validator checks the JSON body.",
+       "card": [
+        "Origin request /prod/cart/items",
+        "authorizer: claims.sub = c-42"
+       ]
+      },
+      {
+       "label": "3",
+       "src": "apigw",
+       "tgt": "lcart",
+       "title": "Invoke",
+       "text": "API Gateway invokes the cart function. The event carries the token claims (sub is the customer ID).",
+       "card": [
+        "Lambda event",
+        "requestContext.authorizer.claims.sub = c-42",
+        "body {sku, qty}"
+       ]
+      },
+      {
+       "label": "4",
+       "src": "lcart",
+       "tgt": "ddb",
+       "title": "Cart write",
+       "text": "The function updates the cart item and sets expiresAt. DynamoDB TTL deletes old carts. Return path: Lambda → API Gateway → CloudFront → browser.",
+       "card": [
+        "UpdateItem table cart",
+        "PK CART#c-42, SK SKU#123",
+        "SET qty, expiresAt (TTL)"
+       ]
+      }
+     ]
+    },
+    {
+     "id": "p2s5",
+     "no": 5,
+     "color": "#3F8624",
+     "title": "Scenario 5 - The browser opens the WebSocket",
+     "who": "The browser opens this connection before the checkout. Page 3 uses it to push the checkout result.",
+     "needs": "Needs: Scenario 2 (the ID token).",
+     "steps": [
+      {
+       "label": "1",
+       "src": "users-customer",
+       "tgt": "r53",
+       "title": "DNS lookup",
+       "text": "The browser asks for ws.shop.tdsynnexlab.link. Route 53 answers with an alias to the custom domain of the WebSocket API.",
+       "card": [
+        "DNS query: ws.shop.tdsynnexlab.link",
+        "Answer: alias to the regional API domain (eu-central-1)"
+       ]
+      },
+      {
+       "label": "2",
+       "src": "users-customer",
+       "tgt": "wsapi",
+       "title": "WebSocket upgrade",
+       "text": "The browser opens wss://ws.shop.tdsynnexlab.link with the token. A Lambda authorizer checks the Cognito token on the $connect route.",
+       "card": [
+        "GET wss://ws.shop.tdsynnexlab.link/?token=&lt;JWT&gt;",
+        "Upgrade: websocket",
+        "TLS certificate: ACM in eu-central-1"
+       ]
+      },
+      {
+       "label": "3",
+       "src": "wsapi",
+       "tgt": "lws",
+       "title": "$connect route",
+       "text": "API Gateway invokes the ws function with the connection ID.",
+       "card": [
+        "Lambda event, routeKey $connect",
+        "connectionId = Ab12=",
+        "authorizer.principalId = c-42"
+       ]
+      },
+      {
+       "label": "4",
+       "src": "lws",
+       "tgt": "ddb",
+       "title": "Store the connection",
+       "text": "The function writes the connection ID with the customer ID and a TTL. Return path: API Gateway sends 101 Switching Protocols. The connection stays open.",
+       "card": [
+        "PutItem table ws-connections",
+        "PK CUST#c-42, connectionId Ab12=",
+        "expiresAt (TTL)"
+       ]
+      }
+     ]
+    },
+    {
+     "id": "p2s6",
+     "no": 6,
+     "color": "#E7157B",
+     "title": "Scenario 6 - The customer starts the checkout",
+     "who": "The signed-in customer starts this flow from the cart page.",
+     "needs": "Needs: Scenario 4 (the cart) and Scenario 5 (the open WebSocket).",
+     "steps": [
+      {
+       "label": "1",
+       "src": "users-customer",
+       "tgt": "cf",
+       "title": "Checkout request",
+       "text": "The SPA sends POST /api/checkout with the ID token and an Idempotency-Key header.",
+       "card": [
+        "HTTPS POST /api/checkout",
+        "Authorization: Bearer &lt;ID token&gt;",
+        "Idempotency-Key: o-1001"
+       ]
+      },
+      {
+       "label": "2",
+       "src": "cf",
+       "tgt": "apigw",
+       "title": "Token check",
+       "text": "The Cognito authorizer checks the token. The request validator checks the body.",
+       "card": [
+        "Origin request /prod/checkout",
+        "authorizer: claims.sub = c-42"
+       ]
+      },
+      {
+       "label": "3",
+       "src": "apigw",
+       "tgt": "sfn",
+       "title": "Direct integration",
+       "text": "API Gateway calls StartExecution. The execution name is the Idempotency-Key, so a retry does not start a second saga. Return path: API Gateway sends 202 to the browser. Page 3 continues the saga.",
+       "card": [
+        "StartExecution checkout-saga (Standard)",
+        "name = o-1001",
+        "input {orderId: o-1001, customerId: c-42, cartId}",
+        "Response: 202 {executionArn}"
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "page": 3,
+   "name": "3 Checkout saga",
+   "title": "Page 3 - Checkout saga (Step Functions Standard) and OrderPlaced fan-out",
+   "sub": "Payment with a task token callback, compensation on failure, result push over the WebSocket, OrderPlaced on the commerce bus.",
+   "scenarios": [
+    {
+     "id": "p3s1",
+     "no": 1,
+     "color": "#007CBD",
+     "title": "Scenario 1 - The saga reserves stock and asks for payment",
+     "who": "The Step Functions Standard workflow checkout-saga starts this flow.",
+     "needs": "Needs: page 2, Scenario 6 (the execution started).",
+     "steps": [
+      {
+       "label": "1",
+       "src": "sfn",
+       "tgt": "ddb",
+       "title": "Reserve stock",
+       "text": "The workflow calls UpdateItem directly with the condition available >= qty. If the condition fails, the saga stops with OutOfStock.",
+       "card": [
+        "UpdateItem table stock, PK SKU#123",
+        "ConditionExpression available >= :qty",
+        "SET available = available - :qty"
+       ]
+      },
+      {
+       "label": "2",
+       "src": "sfn",
+       "tgt": "lpay",
+       "title": "Payment task with a task token",
+       "text": "The workflow invokes the payment function with .waitForTaskToken. Then the workflow waits for the callback. The wait has a 15-minute timeout.",
+       "card": [
+        "Invoke payment-svc (.waitForTaskToken)",
+        "Payload {orderId: o-1001, amount: 1299.00 EUR,",
+        "taskToken: AQB...}"
+       ]
+      },
+      {
+       "label": "3",
+       "src": "lpay",
+       "tgt": "ddb",
+       "title": "Store the task token",
+       "text": "The function writes the task token under the order ID. AWS delivers the request privately on the AWS backbone through the DynamoDB gateway endpoint.",
+       "card": [
+        "PutItem table idempotency",
+        "PK PAY#o-1001, taskToken AQB...",
+        "expiresAt (TTL)"
+       ]
+      },
+      {
+       "label": "4",
+       "src": "lpay",
+       "tgt": "nata",
+       "title": "Internet call from the VPC",
+       "text": "The function ENI sends the HTTPS request. Route table rtb-private-a sends 0.0.0.0/0 to nat-a.",
+       "card": [
+        "HTTPS POST api.payments.example/v1/payments",
+        "src 10.0.16.25 (Lambda ENI a private IP)",
+        "dst 198.51.100.40 (provider public IP)"
+       ]
+      },
+      {
+       "label": "5",
+       "src": "nata",
+       "tgt": "igw",
+       "title": "SNAT by the NAT gateway",
+       "text": "The NAT gateway replaces the source with its private IP 10.0.0.10. Route table rtb-public-a sends 0.0.0.0/0 to igw-shop.",
+       "card": [
+        "src 10.0.0.10 (NAT GW a private IP)",
+        "dst 198.51.100.40 (provider public IP)",
+        "SNAT by NAT GW a"
+       ]
+      },
+      {
+       "label": "6",
+       "src": "igw",
+       "tgt": "ext-payment",
+       "title": "Create the payment",
+       "text": "The internet gateway maps 10.0.0.10 to the Elastic IP 203.0.113.11. The provider uses the order ID as idempotency key. Return path: provider → IGW → NAT GW → Lambda. The workflow keeps waiting.",
+       "card": [
+        "src 203.0.113.11 (NAT GW a Elastic IP)",
+        "Idempotency-Key: o-1001",
+        "metadata {orderId: o-1001}"
+       ]
+      }
+     ]
+    },
+    {
+     "id": "p3s2",
+     "no": 2,
+     "color": "#ED7100",
+     "title": "Scenario 2 - The payment provider sends the webhook",
+     "who": "The payment provider starts this flow when the payment succeeds or fails.",
+     "needs": "Needs: Scenario 1 (the payment exists).",
+     "steps": [
+      {
+       "label": "1",
+       "src": "ext-payment",
+       "tgt": "cf",
+       "title": "Webhook",
+       "text": "The provider sends POST /api/webhooks/payment to shop.tdsynnexlab.link. WAF checks the request.",
+       "card": [
+        "HTTPS POST /api/webhooks/payment",
+        "Payment-Signature: t=..., v1=...",
+        "body {type: payment.succeeded, orderId: o-1001}"
+       ]
+      },
+      {
+       "label": "2",
+       "src": "cf",
+       "tgt": "apigw",
+       "title": "Origin request",
+       "text": "This route has no Cognito authorizer. The webhook function checks the signature instead.",
+       "card": [
+        "Origin request /prod/webhooks/payment",
+        "no Authorization header"
+       ]
+      },
+      {
+       "label": "3",
+       "src": "apigw",
+       "tgt": "lhook",
+       "title": "Invoke",
+       "text": "API Gateway invokes the webhook function with the raw body and the signature header.",
+       "card": [
+        "Lambda event",
+        "headers.Payment-Signature",
+        "body (raw, for the HMAC check)"
+       ]
+      },
+      {
+       "label": "4",
+       "src": "lhook",
+       "tgt": "ddb",
+       "title": "Find the task token",
+       "text": "The function checks the signature with the key from Secrets Manager. It reads the task token for the order ID. It ignores an event ID that it processed before.",
+       "card": [
+        "GetItem PK PAY#o-1001 → taskToken",
+        "PutItem EVT#evt_9",
+        "(condition attribute_not_exists)"
+       ]
+      },
+      {
+       "label": "5",
+       "src": "lhook",
+       "tgt": "sfn",
+       "title": "Callback",
+       "text": "The function calls SendTaskSuccess for a paid order or SendTaskFailure for a failed payment. Return path: Lambda → API Gateway → CloudFront → provider (200).",
+       "card": [
+        "SendTaskSuccess",
+        "taskToken AQB...",
+        "output {paymentId: pay_77, status: PAID}"
+       ]
+      }
+     ]
+    },
+    {
+     "id": "p3s3",
+     "no": 3,
+     "color": "#7AA116",
+     "title": "Scenario 3 - The saga writes the order and tells the customer",
+     "who": "The workflow continues after SendTaskSuccess.",
+     "needs": "Needs: Scenario 2 (the callback).",
+     "steps": [
+      {
+       "label": "1",
+       "src": "sfn",
+       "tgt": "lorder",
+       "title": "Write the order",
+       "text": "The workflow invokes the order function with the order data and the payment ID.",
+       "card": [
+        "Invoke order-svc",
+        "{orderId: o-1001, customerId: c-42,",
+        "lines[], paymentId: pay_77}"
+       ]
+      },
+      {
+       "label": "2",
+       "src": "lorder",
+       "tgt": "proxy",
+       "title": "Pooled connection",
+       "text": "The function connects to RDS Proxy with IAM authentication. The proxy keeps a pool of database connections.",
+       "card": [
+        "PostgreSQL 5432 over TLS",
+        "user order_svc, IAM auth token"
+       ]
+      },
+      {
+       "label": "3",
+       "src": "proxy",
+       "tgt": "aura",
+       "title": "One transaction",
+       "text": "The proxy sends the statements to the writer in AZ-a. One transaction writes the order and its lines.",
+       "card": [
+        "BEGIN",
+        "INSERT INTO orders ...; INSERT INTO order_lines ...",
+        "COMMIT"
+       ]
+      },
+      {
+       "label": "4",
+       "src": "sfn",
+       "tgt": "eb",
+       "title": "Publish OrderPlaced",
+       "text": "The workflow calls PutEvents directly on the commerce bus. Scenario 5 shows the targets.",
+       "card": [
+        "PutEvents, EventBusName commerce",
+        "source com.shop.checkout",
+        "detail-type OrderPlaced",
+        "detail {orderId: o-1001, customerId: c-42, total: 1299.00}"
+       ]
+      },
+      {
+       "label": "5",
+       "src": "sfn",
+       "tgt": "lws",
+       "title": "Push request",
+       "text": "The workflow invokes the ws function with the order ID and the status CONFIRMED.",
+       "card": [
+        "Invoke ws-push",
+        "{customerId: c-42, orderId: o-1001,",
+        "status: CONFIRMED}"
+       ]
+      },
+      {
+       "label": "6",
+       "src": "lws",
+       "tgt": "ddb",
+       "title": "Find the connection",
+       "text": "The function reads the connection ID of the customer from the ws-connections table.",
+       "card": [
+        "Query table ws-connections",
+        "PK CUST#c-42 → connectionId Ab12="
+       ]
+      },
+      {
+       "label": "7",
+       "src": "lws",
+       "tgt": "wsapi",
+       "title": "Post to the connection",
+       "text": "The function calls the @connections API with the message.",
+       "card": [
+        "POST /prod/@connections/Ab12=",
+        "SigV4, execute-api:ManageConnections"
+       ]
+      },
+      {
+       "label": "8",
+       "src": "wsapi",
+       "tgt": "users-customer",
+       "title": "Push",
+       "text": "API Gateway sends the message on the open WebSocket. The SPA shows the order confirmation. Return path: none. The push goes one way.",
+       "card": [
+        "WebSocket frame",
+        "{type: checkout.result, orderId: o-1001,",
+        "status: CONFIRMED}"
+       ]
+      }
+     ]
+    },
+    {
+     "id": "p3s4",
+     "no": 4,
+     "color": "#C925D1",
+     "title": "Scenario 4 - The saga undoes the reservation",
+     "who": "Compensation: the workflow catches the payment error.",
+     "needs": "Branch of Scenario 1, step 2: SendTaskFailure arrives, or the 15-minute timeout ends the wait.",
+     "steps": [
+      {
+       "label": "1",
+       "src": "sfn",
+       "tgt": "ddb",
+       "title": "Release the stock",
+       "text": "The Catch block calls UpdateItem. It adds the reserved quantity back to available.",
+       "card": [
+        "UpdateItem table stock, PK SKU#123",
+        "SET available = available + :qty"
+       ]
+      },
+      {
+       "label": "2",
+       "src": "sfn",
+       "tgt": "eb",
+       "title": "Publish PaymentFailed",
+       "text": "The workflow publishes PaymentFailed on the commerce bus.",
+       "card": [
+        "PutEvents, EventBusName commerce",
+        "source com.shop.checkout",
+        "detail-type PaymentFailed",
+        "detail {orderId: o-1001, reason: declined | timeout}"
+       ]
+      },
+      {
+       "label": "3",
+       "src": "sfn",
+       "tgt": "lws",
+       "title": "Push request",
+       "text": "The workflow invokes the ws function with the status PAYMENT_FAILED.",
+       "card": [
+        "Invoke ws-push",
+        "{customerId: c-42, orderId: o-1001,",
+        "status: PAYMENT_FAILED}"
+       ]
+      },
+      {
+       "label": "4",
+       "src": "lws",
+       "tgt": "wsapi",
+       "title": "Post to the connection",
+       "text": "The function reads the connection ID first, as in Scenario 3, step 6. Then it calls the @connections API.",
+       "card": [
+        "POST /prod/@connections/Ab12=",
+        "SigV4, execute-api:ManageConnections"
+       ]
+      },
+      {
+       "label": "5",
+       "src": "wsapi",
+       "tgt": "users-customer",
+       "title": "Push",
+       "text": "The SPA shows that the payment failed. Return path: none. If the Aurora write fails after the payment, the saga also refunds through Lambda payment (not drawn).",
+       "card": [
+        "WebSocket frame",
+        "{type: checkout.result, orderId: o-1001,",
+        "status: PAYMENT_FAILED}"
+       ]
+      }
+     ]
+    },
+    {
+     "id": "p3s5",
+     "no": 5,
+     "color": "#3F8624",
+     "title": "Scenario 5 - EventBridge delivers OrderPlaced",
+     "who": "The commerce bus starts this flow. Three rules match the same event. Steps 1a, 1b and 1c run in parallel.",
+     "needs": "Needs: Scenario 3, step 4 (OrderPlaced on the bus).",
+     "steps": [
+      {
+       "label": "1a",
+       "src": "eb",
+       "tgt": "sns",
+       "title": "Rule order-placed-notify",
+       "text": "The rule sends the event to the notification topic. Page 4 shows the email and the SMS.",
+       "card": [
+        "SNS Publish, topic order-notifications",
+        "MessageAttributes eventType = OrderPlaced"
+       ]
+      },
+      {
+       "label": "1b",
+       "src": "eb",
+       "tgt": "sqsbuf",
+       "title": "Rule order-placed-fulfil",
+       "text": "The rule sends the event to the order buffer queue. The queue protects the 3PL link from peaks. Page 4 shows the fulfillment.",
+       "card": [
+        "SQS SendMessage, queue order-buffer",
+        "body = the event JSON"
+       ]
+      },
+      {
+       "label": "1c",
+       "src": "eb",
+       "tgt": "lprodc",
+       "title": "Rule commerce-log",
+       "text": "The rule invokes the producer function in the VPC.",
+       "card": [
+        "Lambda event = the EventBridge event",
+        "detail-type OrderPlaced"
+       ]
+      },
+      {
+       "label": "2",
+       "src": "lprodc",
+       "tgt": "msk",
+       "title": "Event log",
+       "text": "The function writes the event to the Kafka topic commerce-events with IAM authentication.",
+       "card": [
+        "Kafka produce, topic commerce-events",
+        "key o-1001, value = the event JSON",
+        "SASL/IAM on port 9098"
+       ]
+      },
+      {
+       "label": "3",
+       "src": "eb",
+       "tgt": "dlq",
+       "title": "Failed delivery",
+       "text": "If a target still fails after all retries, EventBridge sends the event to the DLQ of that rule. Return path: none. The bus archive keeps every event for replay.",
+       "card": [
+        "SQS message in the rule DLQ",
+        "attributes ERROR_CODE, RULE_ARN"
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "page": 4,
+   "name": "4 Fulfillment + notifications",
+   "title": "Page 4 - Fulfillment over Amazon MQ and customer notifications",
+   "sub": "FulfillOrder goes to the 3PL over the VPN. ShipmentDispatched comes back through EventBridge Pipes. SNS fans out to email, SMS and back office.",
+   "scenarios": [
+    {
+     "id": "p4s1",
+     "no": 1,
+     "color": "#007CBD",
+     "title": "Scenario 1 - The fulfillment command goes to the 3PL",
+     "who": "The order buffer queue starts this flow.",
+     "needs": "Needs: page 3, Scenario 5, step 1b (OrderPlaced in the buffer).",
+     "steps": [
+      {
+       "label": "1",
+       "src": "sqsbuf",
+       "tgt": "lful",
+       "title": "Poll",
+       "text": "The event source mapping polls the queue and invokes the function with a batch. The function reports only the failed items.",
+       "card": [
+        "SQS ReceiveMessage (event source mapping)",
+        "Records[].body = OrderPlaced event",
+        "ReportBatchItemFailures"
+       ]
+      },
+      {
+       "label": "2",
+       "src": "lful",
+       "tgt": "mqa",
+       "title": "Publish FulfillOrder",
+       "text": "The function publishes a persistent FulfillOrder message to the fulfillment exchange over AMQPS. The broker confirms each message.",
+       "card": [
+        "AMQP basic.publish, exchange fulfillment",
+        "routing key 3pl.orders, delivery_mode 2",
+        "type FulfillOrder, message_id o-1001"
+       ]
+      },
+      {
+       "label": "3",
+       "src": "mqa",
+       "tgt": "vgw",
+       "title": "To the VPN",
+       "text": "The broker sends the message on the AMQPS connection that the WMS opened. Route table rtb-private-a sends 172.16.0.0/16 to vgw-shop.",
+       "card": [
+        "AMQPS 5671",
+        "src 10.0.16.40 (MQ node a private IP)",
+        "dst 172.16.10.5 (3PL WMS private IP)"
+       ]
+      },
+      {
+       "label": "4",
+       "src": "vgw",
+       "tgt": "onprem-3pl",
+       "title": "Delivery",
+       "text": "The Site-to-Site VPN carries the message to the customer gateway of the 3PL. The WMS reads the message and sends an ack. Return path: the ack goes back the same way to the broker.",
+       "card": [
+        "IPsec tunnel to the 3PL customer gateway",
+        "WMS sends basic.ack"
+       ]
+      }
+     ]
+    },
+    {
+     "id": "p4s2",
+     "no": 2,
+     "color": "#ED7100",
+     "title": "Scenario 2 - The 3PL reports the shipment",
+     "who": "The 3PL WMS starts this flow when a parcel leaves the warehouse.",
+     "needs": "",
+     "steps": [
+      {
+       "label": "1",
+       "src": "onprem-3pl",
+       "tgt": "vgw",
+       "title": "Publish ShipmentDispatched",
+       "text": "The WMS publishes the message to the shipments exchange over the VPN.",
+       "card": [
+        "AMQP basic.publish, exchange shipments",
+        "src 172.16.10.5 (3PL WMS private IP)",
+        "dst 10.0.16.40 (MQ node a private IP)"
+       ]
+      },
+      {
+       "label": "2",
+       "src": "vgw",
+       "tgt": "mqa",
+       "title": "Into the VPC",
+       "text": "The virtual private gateway delivers the packets to the broker. The broker stores the message in the queue shipments.events.",
+       "card": [
+        "queue shipments.events",
+        "body {orderId: o-1001, carrier, trackingNo}"
+       ]
+      },
+      {
+       "label": "3",
+       "src": "mqa",
+       "tgt": "pipes",
+       "title": "Poll",
+       "text": "The pipe reads batches from the queue. Its filter passes only ShipmentDispatched messages. An MQ source runs 5 pollers. A quota increase gives more.",
+       "card": [
+        "Pipe source: Amazon MQ queue shipments.events",
+        "filter: data.type = ShipmentDispatched"
+       ]
+      },
+      {
+       "label": "4",
+       "src": "pipes",
+       "tgt": "eb",
+       "title": "Publish to the bus",
+       "text": "The pipe sends the event to the commerce bus with detail-type ShipmentDispatched.",
+       "card": [
+        "PutEvents, EventBusName commerce",
+        "source com.shop.3pl",
+        "detail-type ShipmentDispatched",
+        "detail {orderId: o-1001, trackingNo}"
+       ]
+      },
+      {
+       "label": "5",
+       "src": "eb",
+       "tgt": "sns",
+       "title": "Rule shipment-notify",
+       "text": "The rule sends the event to the notification topic. Scenarios 3 and 4 continue. Return path: none. The pipe acknowledges the messages after the delivery.",
+       "card": [
+        "SNS Publish, topic order-notifications",
+        "MessageAttributes eventType = ShipmentDispatched"
+       ]
+      }
+     ]
+    },
+    {
+     "id": "p4s3",
+     "no": 3,
+     "color": "#7AA116",
+     "title": "Scenario 3 - The customer gets an email",
+     "who": "The notification topic starts this flow.",
+     "needs": "Needs: page 3, Scenario 5, step 1a, or Scenario 2, step 5.",
+     "steps": [
+      {
+       "label": "1",
+       "src": "sns",
+       "tgt": "sqsmail",
+       "title": "Fan-out",
+       "text": "The topic sends a copy to the email queue with raw message delivery.",
+       "card": [
+        "SQS message, body = the event JSON (raw)"
+       ]
+      },
+      {
+       "label": "2",
+       "src": "sqsmail",
+       "tgt": "lmail",
+       "title": "Poll",
+       "text": "The event source mapping invokes the email function with a batch.",
+       "card": [
+        "Records[], eventType OrderPlaced"
+       ]
+      },
+      {
+       "label": "3",
+       "src": "lmail",
+       "tgt": "ses",
+       "title": "Send the email",
+       "text": "The function selects the template from the event type. It calls SendEmail with the configuration set.",
+       "card": [
+        "SESv2 SendEmail",
+        "Template OrderConfirmed | ShipmentDispatched",
+        "ConfigurationSetName shop-mail"
+       ]
+      },
+      {
+       "label": "4",
+       "src": "ses",
+       "tgt": "users-inbox",
+       "title": "Delivery",
+       "text": "SES delivers the email to the mailbox of the customer. Return path: the configuration set sends bounce and complaint events to the EventBridge default bus.",
+       "card": [
+        "SMTP to the mail server of the customer",
+        "From: orders@shop.tdsynnexlab.link"
+       ]
+      }
+     ]
+    },
+    {
+     "id": "p4s4",
+     "no": 4,
+     "color": "#C925D1",
+     "title": "Scenario 4 - The customer gets an SMS",
+     "who": "The notification topic starts this flow.",
+     "needs": "Needs: the same event as Scenario 3.",
+     "steps": [
+      {
+       "label": "1",
+       "src": "sns",
+       "tgt": "sqssms",
+       "title": "Fan-out",
+       "text": "The topic sends a copy to the SMS queue. A filter policy passes only customers who accept SMS.",
+       "card": [
+        "Subscription filter policy {smsOptIn: [true]}"
+       ]
+      },
+      {
+       "label": "2",
+       "src": "sqssms",
+       "tgt": "lsms",
+       "title": "Poll",
+       "text": "The event source mapping invokes the SMS function.",
+       "card": [
+        "Records[], eventType OrderPlaced"
+       ]
+      },
+      {
+       "label": "3",
+       "src": "lsms",
+       "tgt": "eum",
+       "title": "Send the SMS",
+       "text": "The function calls SendTextMessage of AWS End User Messaging SMS.",
+       "card": [
+        "SendTextMessage",
+        "DestinationPhoneNumber +49...",
+        "MessageBody: Order o-1001 confirmed"
+       ]
+      },
+      {
+       "label": "4",
+       "src": "eum",
+       "tgt": "users-inbox",
+       "title": "Delivery",
+       "text": "The SMS goes to the phone of the customer. Return path: none.",
+       "card": [
+        "SMS to +49..."
+       ]
+      }
+     ]
+    },
+    {
+     "id": "p4s5",
+     "no": 5,
+     "color": "#3F8624",
+     "title": "Scenario 5 - The back office gets a copy",
+     "who": "The notification topic starts this flow.",
+     "needs": "Needs: the same event as Scenario 3.",
+     "steps": [
+      {
+       "label": "1",
+       "src": "sns",
+       "tgt": "sqsbo",
+       "title": "Fan-out",
+       "text": "The topic sends a copy to the back-office queue. The back-office application reads it. That application is outside this design. Return path: none.",
+       "card": [
+        "SQS message",
+        "eventType OrderPlaced | ShipmentDispatched"
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "page": 5,
+   "name": "5 Admin + analytics",
+   "title": "Page 5 - Catalog administration, image processing and clickstream analytics",
+   "sub": "Catalog writes reach OpenSearch through the DynamoDB zero-ETL integration. Images resize on upload. Clickstream goes through MSK to the data lake and the counters.",
+   "scenarios": [
+    {
+     "id": "p5s1",
+     "no": 1,
+     "color": "#007CBD",
+     "title": "Scenario 1 - The admin saves a product",
+     "who": "A back-office admin starts this flow from the admin pages of the SPA.",
+     "needs": "Needs: the admin signed in with MFA (as on page 2, Scenario 2).",
+     "steps": [
+      {
+       "label": "1",
+       "src": "users-admin",
+       "tgt": "cf",
+       "title": "Admin request",
+       "text": "The admin pages send PUT /api/admin/products/SKU#123 with the ID token.",
+       "card": [
+        "HTTPS PUT /api/admin/products/SKU%23123",
+        "Authorization: Bearer &lt;ID token&gt;",
+        "body {name, price, attributes}"
+       ]
+      },
+      {
+       "label": "2",
+       "src": "cf",
+       "tgt": "apigw",
+       "title": "Token and group check",
+       "text": "The authorizer accepts only tokens with the admins group claim. The request validator checks the product body.",
+       "card": [
+        "Origin request /prod/admin/products/SKU%23123",
+        "claims cognito:groups = [admins]"
+       ]
+      },
+      {
+       "label": "3",
+       "src": "apigw",
+       "tgt": "lprod",
+       "title": "Invoke",
+       "text": "API Gateway invokes the product function on the admin route.",
+       "card": [
+        "Lambda event, resource /admin/products/{sku}"
+       ]
+      },
+      {
+       "label": "4",
+       "src": "lprod",
+       "tgt": "ddb",
+       "title": "Write the product",
+       "text": "The function writes the product item. DynamoDB Streams records the change. Return path: Lambda → API Gateway → CloudFront → admin.",
+       "card": [
+        "PutItem table catalog, PK SKU#123",
+        "stream record with the new image"
+       ]
+      }
+     ]
+    },
+    {
+     "id": "p5s2",
+     "no": 2,
+     "color": "#ED7100",
+     "title": "Scenario 2 - Zero-ETL copies the change to OpenSearch",
+     "who": "The DynamoDB stream starts this flow.",
+     "needs": "Needs: Scenario 1 (the stream record).",
+     "steps": [
+      {
+       "label": "1",
+       "src": "ddb",
+       "tgt": "osis",
+       "title": "Read the stream",
+       "text": "The OpenSearch Ingestion pipeline of the zero-ETL integration reads the DynamoDB stream. The first full copy came from a point-in-time recovery (PITR) export.",
+       "card": [
+        "Stream record, eventName MODIFY",
+        "NewImage {SKU#123, name, price}"
+       ]
+      },
+      {
+       "label": "2",
+       "src": "osis",
+       "tgt": "aoss",
+       "title": "Index the document",
+       "text": "The pipeline writes the document to the products index. Search shows the change after a short delay. Return path: none.",
+       "card": [
+        "Bulk index, index products",
+        "_id SKU#123"
+       ]
+      }
+     ]
+    },
+    {
+     "id": "p5s3",
+     "no": 3,
+     "color": "#7AA116",
+     "title": "Scenario 3 - The admin gets a presigned upload URL",
+     "who": "A back-office admin starts this flow before an image upload.",
+     "needs": "Needs: the admin signed in with MFA.",
+     "steps": [
+      {
+       "label": "1",
+       "src": "users-admin",
+       "tgt": "cf",
+       "title": "Request",
+       "text": "The admin pages send POST /api/admin/images/upload-url with the ID token.",
+       "card": [
+        "HTTPS POST /api/admin/images/upload-url",
+        "body {sku: SKU#123, contentType: image/jpeg}"
+       ]
+      },
+      {
+       "label": "2",
+       "src": "cf",
+       "tgt": "apigw",
+       "title": "Token and group check",
+       "text": "The authorizer accepts only tokens with the admins group claim.",
+       "card": [
+        "Origin request /prod/admin/images/upload-url",
+        "claims cognito:groups = [admins]"
+       ]
+      },
+      {
+       "label": "3",
+       "src": "apigw",
+       "tgt": "lprod",
+       "title": "Sign the URL",
+       "text": "The function signs a PUT URL for the uploads bucket. It does not call S3. Return path: the URL goes back to the admin. The URL expires after a short time (for example 5 minutes).",
+       "card": [
+        "Response {url: https://&lt;uploads bucket&gt;.s3.eu-central-1",
+        ".amazonaws.com/SKU%23123/orig.jpg?X-Amz-Signature=...}"
+       ]
+      }
+     ]
+    },
+    {
+     "id": "p5s4",
+     "no": 4,
+     "color": "#C925D1",
+     "title": "Scenario 4 - The admin browser uploads the image",
+     "who": "The admin browser starts this flow.",
+     "needs": "Needs: Scenario 3 (the presigned URL).",
+     "steps": [
+      {
+       "label": "1",
+       "src": "users-admin",
+       "tgt": "s3up",
+       "title": "Upload",
+       "text": "The browser sends the file with HTTPS PUT to the presigned URL. The upload does not use CloudFront or API Gateway. Return path: S3 sends 200 to the browser.",
+       "card": [
+        "HTTPS PUT /SKU%23123/orig.jpg",
+        "Host: &lt;uploads bucket&gt;.s3.eu-central-1.amazonaws.com",
+        "Content-Type: image/jpeg"
+       ]
+      }
+     ]
+    },
+    {
+     "id": "p5s5",
+     "no": 5,
+     "color": "#3F8624",
+     "title": "Scenario 5 - S3 starts the image resize",
+     "who": "The uploads bucket starts this flow.",
+     "needs": "Needs: Scenario 4 (the new object).",
+     "steps": [
+      {
+       "label": "1",
+       "src": "s3up",
+       "tgt": "busdef",
+       "title": "Object Created event",
+       "text": "The bucket sends an Object Created event to the EventBridge default bus. S3 sends its events only to the default bus.",
+       "card": [
+        "source aws.s3, detail-type Object Created",
+        "detail.bucket.name = uploads bucket",
+        "detail.object.key = SKU#123/orig.jpg"
+       ]
+      },
+      {
+       "label": "2",
+       "src": "busdef",
+       "tgt": "lresize",
+       "title": "Rule image-uploaded",
+       "text": "The rule matches the uploads bucket and invokes the resize function. A DLQ keeps failed deliveries.",
+       "card": [
+        "Lambda event = the EventBridge event"
+       ]
+      },
+      {
+       "label": "3",
+       "src": "lresize",
+       "tgt": "s3up",
+       "title": "Read the original",
+       "text": "The function reads the original image with GetObject.",
+       "card": [
+        "GetObject uploads bucket, SKU#123/orig.jpg"
+       ]
+      },
+      {
+       "label": "4",
+       "src": "lresize",
+       "tgt": "s3web",
+       "title": "Write the sizes",
+       "text": "The function writes three sizes to the web bucket. CloudFront serves them under /images/*. Return path: none. The separate bucket prevents a resize loop.",
+       "card": [
+        "PutObject web bucket",
+        "images/SKU#123/sm.webp, md.webp, lg.webp"
+       ]
+      }
+     ]
+    },
+    {
+     "id": "p5s6",
+     "no": 6,
+     "color": "#E7157B",
+     "title": "Scenario 6 - The browser sends clickstream events",
+     "who": "The customer browser starts this flow while the customer uses the shop.",
+     "needs": "Needs: page 2, Scenario 1 (the SPA runs).",
+     "steps": [
+      {
+       "label": "1",
+       "src": "users-customer",
+       "tgt": "cf",
+       "title": "Event batch",
+       "text": "The SPA sends POST /api/events with a batch of page views and clicks.",
+       "card": [
+        "HTTPS POST /api/events",
+        "[{type: page_view, sku, ts}, ...]"
+       ]
+      },
+      {
+       "label": "2",
+       "src": "cf",
+       "tgt": "apigw",
+       "title": "Origin request",
+       "text": "CloudFront sends the batch to the REST API. Throttling on the /events route limits the request rate.",
+       "card": [
+        "Origin request /prod/events"
+       ]
+      },
+      {
+       "label": "3",
+       "src": "apigw",
+       "tgt": "lprodc",
+       "title": "Invoke",
+       "text": "API Gateway invokes the producer function. The function runs in the VPC because the browser cannot speak Kafka.",
+       "card": [
+        "Lambda event, body = the event batch"
+       ]
+      },
+      {
+       "label": "4",
+       "src": "lprodc",
+       "tgt": "msk",
+       "title": "Produce",
+       "text": "The function writes the events to the topic clickstream. The key is the session ID. Return path: Lambda → API Gateway → CloudFront → browser (202).",
+       "card": [
+        "Kafka produce, topic clickstream",
+        "key = session s-9",
+        "SASL/IAM on port 9098"
+       ]
+      }
+     ]
+    },
+    {
+     "id": "p5s7",
+     "no": 7,
+     "color": "#00A4A6",
+     "title": "Scenario 7 - A consumer writes the data lake",
+     "who": "MSK Serverless starts this flow through an event source mapping.",
+     "needs": "Needs: Scenario 6 (or page 3, Scenario 5, step 2 for commerce events).",
+     "steps": [
+      {
+       "label": "1",
+       "src": "msk",
+       "tgt": "larch",
+       "title": "Poll",
+       "text": "The event source mapping in provisioned mode reads batches. Its consumer group is archive.",
+       "card": [
+        "Records from clickstream-0, offsets 1200-1499",
+        "consumer group archive"
+       ]
+      },
+      {
+       "label": "2",
+       "src": "larch",
+       "tgt": "s3lake",
+       "title": "Write a batch file",
+       "text": "The function writes one file for each batch. The object key has date and hour partitions. The marketing team queries this data. Return path: none.",
+       "card": [
+        "PutObject data lake bucket",
+        "clickstream/dt=2026-10-26/hour=14/part-0001.json.gz"
+       ]
+      }
+     ]
+    },
+    {
+     "id": "p5s8",
+     "no": 8,
+     "color": "#545B64",
+     "title": "Scenario 8 - A consumer counts popular products",
+     "who": "MSK Serverless starts this flow through a second event source mapping.",
+     "needs": "Needs: Scenario 6.",
+     "steps": [
+      {
+       "label": "1",
+       "src": "msk",
+       "tgt": "lcount",
+       "title": "Poll",
+       "text": "A second event source mapping reads the same topic. Its consumer group is counters.",
+       "card": [
+        "consumer group counters",
+        "Records[], type page_view"
+       ]
+      },
+      {
+       "label": "2",
+       "src": "lcount",
+       "tgt": "ddb",
+       "title": "Update the counters",
+       "text": "The function adds the view counts for each SKU with an atomic ADD. The product function reads these counters. Return path: none.",
+       "card": [
+        "UpdateItem table counters, PK POP#SKU#123",
+        "ADD views :n"
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

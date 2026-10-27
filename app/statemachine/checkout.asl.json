@@ -1,0 +1,1683 @@
+{
+ "Comment": "Voltaj checkout saga: reserve stock, wait for the payment callback, write the order, publish OrderPlaced; compensate on failure.",
+ "QueryLanguage": "JSONata",
+ "StartAt": "Init",
+ "States": {
+  "Init": {
+   "Type": "Pass",
+   "Assign": {
+    "cid": "{% $states.input.cid %}",
+    "vid": "{% $states.input.vid %}",
+    "orderId": "{% $states.input.orderId %}",
+    "customerId": "{% $states.input.customerId %}",
+    "name": "{% $states.input.name %}",
+    "email": "{% $states.input.email %}",
+    "smsOptIn": "{% $states.input.smsOptIn = 'true' or $states.input.smsOptIn = true %}",
+    "t0": "{% $states.context.Execution.StartTime %}",
+    "total": 0,
+    "lines": []
+   },
+   "Next": "TraceStart"
+  },
+  "TraceStart": {
+   "Type": "Task",
+   "Resource": "arn:aws:states:::dynamodb:putItem",
+   "Arguments": {
+    "TableName": "${TraceTable}",
+    "Item": {
+     "cid": {
+      "S": "{% $cid %}"
+     },
+     "sk": {
+      "S": "{% $now() & '#checkout-saga#TraceStart' %}"
+     },
+     "id": {
+      "S": "{% $substring($uuid(), 0, 10) %}"
+     },
+     "vid": {
+      "S": "{% $vid %}"
+     },
+     "fn": {
+      "S": "checkout-saga"
+     },
+     "svc": {
+      "S": "sfn"
+     },
+     "engine": {
+      "S": "AWS Step Functions"
+     },
+     "op": {
+      "S": "StartExecution"
+     },
+     "request": {
+      "S": "{% 'states.start_execution(stateMachineArn=voltaj-checkout, name=' & $orderId & ', input={orderId, customerId, vid, cid})' %}"
+     },
+     "sc": {
+      "S": "p2s6"
+     },
+     "st": {
+      "S": "3"
+     },
+     "ts": {
+      "S": "{% $now() %}"
+     },
+     "ms": {
+      "N": "{% $string($toMillis($states.context.State.EnteredTime) - $toMillis($t0)) %}"
+     },
+     "ok": {
+      "BOOL": true
+     },
+     "path": {
+      "S": "CloudFront → REST API → Step Functions (direct integration, no Lambda)"
+     },
+     "auth": {
+      "S": "API Gateway integration role (SigV4)"
+     },
+     "expiresAt": {
+      "N": "{% $string($floor($millis() / 1000) + 86400) %}"
+     },
+     "note": {
+      "S": "API Gateway started the Standard workflow and answered 200 with the executionArn at once. The result comes later on the WebSocket."
+     }
+    }
+   },
+   "Output": "{% $states.input %}",
+   "Retry": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "MaxAttempts": 2,
+     "IntervalSeconds": 1
+    }
+   ],
+   "Catch": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "Next": "Guard"
+    }
+   ],
+   "Next": "Guard"
+  },
+  "Guard": {
+   "Type": "Task",
+   "Resource": "arn:aws:states:::dynamodb:updateItem",
+   "Arguments": {
+    "TableName": "${GuardTable}",
+    "Key": {
+     "pk": {
+      "S": "{% 'checkout#' & $vid & '#' & $string($floor($millis() / 60000)) %}"
+     }
+    },
+    "UpdateExpression": "ADD n :one SET expiresAt = :exp",
+    "ConditionExpression": "attribute_not_exists(n) OR n < :limit",
+    "ExpressionAttributeValues": {
+     ":one": {
+      "N": "1"
+     },
+     ":limit": {
+      "N": "${CheckoutLimit}"
+     },
+     ":exp": {
+      "N": "{% $string($floor($millis() / 1000) + 180) %}"
+     }
+    }
+   },
+   "Catch": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "Assign": {
+      "reason": "limit reached: ${CheckoutLimit} checkouts per minute"
+     },
+     "Next": "TraceGuard"
+    }
+   ],
+   "Output": "{% $states.input %}",
+   "Next": "ReadCart"
+  },
+  "TraceGuard": {
+   "Type": "Task",
+   "Resource": "arn:aws:states:::dynamodb:putItem",
+   "Arguments": {
+    "TableName": "${TraceTable}",
+    "Item": {
+     "cid": {
+      "S": "{% $cid %}"
+     },
+     "sk": {
+      "S": "{% $now() & '#checkout-saga#TraceGuard' %}"
+     },
+     "id": {
+      "S": "{% $substring($uuid(), 0, 10) %}"
+     },
+     "vid": {
+      "S": "{% $vid %}"
+     },
+     "fn": {
+      "S": "checkout-saga"
+     },
+     "svc": {
+      "S": "guard"
+     },
+     "engine": {
+      "S": "Cost guard"
+     },
+     "op": {
+      "S": "Limit reached"
+     },
+     "request": {
+      "S": "dynamodb.update_item(TableName=voltaj-guard, ADD n :one IF n < limit)"
+     },
+     "sc": {
+      "S": "p2s6"
+     },
+     "st": {
+      "S": "3"
+     },
+     "ts": {
+      "S": "{% $now() %}"
+     },
+     "ms": {
+      "N": "{% $string($toMillis($states.context.State.EnteredTime) - $toMillis($t0)) %}"
+     },
+     "ok": {
+      "BOOL": false
+     },
+     "path": {
+      "S": "Step Functions optimized integration → DynamoDB"
+     },
+     "auth": {
+      "S": "State machine role (SigV4)"
+     },
+     "expiresAt": {
+      "N": "{% $string($floor($millis() / 1000) + 86400) %}"
+     },
+     "note": {
+      "S": "Cost guard: this visitor started too many checkouts in one minute. The workflow stops before it reserves stock."
+     }
+    }
+   },
+   "Output": "{% $states.input %}",
+   "Retry": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "MaxAttempts": 2,
+     "IntervalSeconds": 1
+    }
+   ],
+   "Catch": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "Next": "NotifyLimited"
+    }
+   ],
+   "Next": "NotifyLimited"
+  },
+  "NotifyLimited": {
+   "Type": "Task",
+   "Resource": "arn:aws:states:::lambda:invoke",
+   "Arguments": {
+    "FunctionName": "${WsFn}",
+    "Payload": {
+     "customerId": "{% $customerId %}",
+     "vid": "{% $vid %}",
+     "cid": "{% $cid %}",
+     "orderId": "{% $orderId %}",
+     "status": "LIMITED",
+     "total": "{% $total %}",
+     "scenario": "p3s4",
+     "reason": "{% $reason %}"
+    }
+   },
+   "Output": "{% $states.input %}",
+   "Retry": [
+    {
+     "ErrorEquals": [
+      "Lambda.ServiceException",
+      "Lambda.TooManyRequestsException"
+     ],
+     "MaxAttempts": 3,
+     "IntervalSeconds": 1,
+     "BackoffRate": 2
+    }
+   ],
+   "Catch": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "Next": "Failed"
+    }
+   ],
+   "Next": "Failed"
+  },
+  "ReadCart": {
+   "Type": "Task",
+   "Resource": "arn:aws:states:::aws-sdk:dynamodb:query",
+   "Arguments": {
+    "TableName": "${CartTable}",
+    "KeyConditionExpression": "pk = :pk",
+    "ExpressionAttributeValues": {
+     ":pk": {
+      "S": "{% 'CART#' & $customerId & '~' & $vid %}"
+     }
+    }
+   },
+   "Assign": {
+    "lines": "{% $append([], $map($states.result.Items, function($i) { {'sku': $substringAfter($i.sk.S, 'SKU#'), 'name': $i.name.S, 'qty': $number($i.qty.N), 'price': $number($i.price.N)} })) %}",
+    "total": "{% $round($sum($map($states.result.Items, function($i) { $number($i.qty.N) * $number($i.price.N) })), 2) %}",
+    "t0": "{% $states.context.State.EnteredTime %}"
+   },
+   "Next": "TraceReadCart"
+  },
+  "TraceReadCart": {
+   "Type": "Task",
+   "Resource": "arn:aws:states:::dynamodb:putItem",
+   "Arguments": {
+    "TableName": "${TraceTable}",
+    "Item": {
+     "cid": {
+      "S": "{% $cid %}"
+     },
+     "sk": {
+      "S": "{% $now() & '#checkout-saga#TraceReadCart' %}"
+     },
+     "id": {
+      "S": "{% $substring($uuid(), 0, 10) %}"
+     },
+     "vid": {
+      "S": "{% $vid %}"
+     },
+     "fn": {
+      "S": "checkout-saga"
+     },
+     "svc": {
+      "S": "ddb"
+     },
+     "engine": {
+      "S": "Amazon DynamoDB"
+     },
+     "op": {
+      "S": "Query"
+     },
+     "request": {
+      "S": "{% 'dynamodb.query(TableName=voltaj-cart, KeyConditionExpression=pk = :pk, pk=CART#' & $customerId & '~' & $vid & ')' %}"
+     },
+     "sc": {
+      "S": "p3s1"
+     },
+     "st": {
+      "S": "1"
+     },
+     "ts": {
+      "S": "{% $now() %}"
+     },
+     "ms": {
+      "N": "{% $string($toMillis($states.context.State.EnteredTime) - $toMillis($t0)) %}"
+     },
+     "ok": {
+      "BOOL": true
+     },
+     "path": {
+      "S": "Step Functions SDK integration → DynamoDB"
+     },
+     "auth": {
+      "S": "State machine role (SigV4)"
+     },
+     "expiresAt": {
+      "N": "{% $string($floor($millis() / 1000) + 86400) %}"
+     },
+     "note": {
+      "S": "The workflow reads the cart lines and computes the total itself (SDK integration, no Lambda)."
+     },
+     "items": {
+      "N": "{% $string($count($lines)) %}"
+     }
+    }
+   },
+   "Output": "{% $states.input %}",
+   "Retry": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "MaxAttempts": 2,
+     "IntervalSeconds": 1
+    }
+   ],
+   "Catch": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "Next": "HasLines"
+    }
+   ],
+   "Next": "HasLines"
+  },
+  "HasLines": {
+   "Type": "Choice",
+   "Choices": [
+    {
+     "Condition": "{% $count($lines) > 0 %}",
+     "Next": "Reserve"
+    }
+   ],
+   "Default": "NotifyEmpty"
+  },
+  "Reserve": {
+   "Type": "Task",
+   "Resource": "arn:aws:states:::aws-sdk:dynamodb:transactWriteItems",
+   "Arguments": {
+    "TransactItems": "{% $append([], $map($lines, function($l) { {'Update': {'TableName': '${StockTable}', 'Key': {'pk': {'S': 'SKU#' & $l.sku}}, 'UpdateExpression': 'SET available = available - :q, reserved = if_not_exists(reserved, :z) + :q', 'ConditionExpression': 'available >= :q', 'ExpressionAttributeValues': {':q': {'N': $string($l.qty)}, ':z': {'N': '0'}}}} })) %}"
+   },
+   "Assign": {
+    "t0": "{% $states.context.State.EnteredTime %}"
+   },
+   "Catch": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "Assign": {
+      "reason": "out of stock"
+     },
+     "Next": "TraceOutOfStock"
+    }
+   ],
+   "Next": "TraceReserve"
+  },
+  "TraceReserve": {
+   "Type": "Task",
+   "Resource": "arn:aws:states:::dynamodb:putItem",
+   "Arguments": {
+    "TableName": "${TraceTable}",
+    "Item": {
+     "cid": {
+      "S": "{% $cid %}"
+     },
+     "sk": {
+      "S": "{% $now() & '#checkout-saga#TraceReserve' %}"
+     },
+     "id": {
+      "S": "{% $substring($uuid(), 0, 10) %}"
+     },
+     "vid": {
+      "S": "{% $vid %}"
+     },
+     "fn": {
+      "S": "checkout-saga"
+     },
+     "svc": {
+      "S": "ddb"
+     },
+     "engine": {
+      "S": "Amazon DynamoDB"
+     },
+     "op": {
+      "S": "TransactWriteItems"
+     },
+     "request": {
+      "S": "{% 'dynamodb.transact_write_items(' & $join($map($lines, function($l) { 'Update stock SKU#' & $l.sku & ' SET available = available - ' & $l.qty & ' IF available >= ' & $l.qty }), '; ') & ')' %}"
+     },
+     "sc": {
+      "S": "p3s1"
+     },
+     "st": {
+      "S": "1"
+     },
+     "ts": {
+      "S": "{% $now() %}"
+     },
+     "ms": {
+      "N": "{% $string($toMillis($states.context.State.EnteredTime) - $toMillis($t0)) %}"
+     },
+     "ok": {
+      "BOOL": true
+     },
+     "path": {
+      "S": "Step Functions SDK integration → DynamoDB"
+     },
+     "auth": {
+      "S": "State machine role (SigV4)"
+     },
+     "expiresAt": {
+      "N": "{% $string($floor($millis() / 1000) + 86400) %}"
+     },
+     "note": {
+      "S": "All lines are reserved in one transaction. Each Update has the condition available >= qty, so stock never goes below zero."
+     },
+     "items": {
+      "N": "{% $string($count($lines)) %}"
+     }
+    }
+   },
+   "Output": "{% $states.input %}",
+   "Retry": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "MaxAttempts": 2,
+     "IntervalSeconds": 1
+    }
+   ],
+   "Catch": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "Next": "TraceInvokePay"
+    }
+   ],
+   "Next": "TraceInvokePay"
+  },
+  "TraceOutOfStock": {
+   "Type": "Task",
+   "Resource": "arn:aws:states:::dynamodb:putItem",
+   "Arguments": {
+    "TableName": "${TraceTable}",
+    "Item": {
+     "cid": {
+      "S": "{% $cid %}"
+     },
+     "sk": {
+      "S": "{% $now() & '#checkout-saga#TraceOutOfStock' %}"
+     },
+     "id": {
+      "S": "{% $substring($uuid(), 0, 10) %}"
+     },
+     "vid": {
+      "S": "{% $vid %}"
+     },
+     "fn": {
+      "S": "checkout-saga"
+     },
+     "svc": {
+      "S": "ddb"
+     },
+     "engine": {
+      "S": "Amazon DynamoDB"
+     },
+     "op": {
+      "S": "TransactWriteItems"
+     },
+     "request": {
+      "S": "dynamodb.transact_write_items(Update stock ... IF available >= qty)"
+     },
+     "sc": {
+      "S": "p3s1"
+     },
+     "st": {
+      "S": "1"
+     },
+     "ts": {
+      "S": "{% $now() %}"
+     },
+     "ms": {
+      "N": "{% $string($toMillis($states.context.State.EnteredTime) - $toMillis($t0)) %}"
+     },
+     "ok": {
+      "BOOL": false
+     },
+     "path": {
+      "S": "Step Functions SDK integration → DynamoDB"
+     },
+     "auth": {
+      "S": "State machine role (SigV4)"
+     },
+     "expiresAt": {
+      "N": "{% $string($floor($millis() / 1000) + 86400) %}"
+     },
+     "note": {
+      "S": "TransactionCanceledException: a condition failed. One product does not have enough stock, so nothing was reserved."
+     }
+    }
+   },
+   "Output": "{% $states.input %}",
+   "Retry": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "MaxAttempts": 2,
+     "IntervalSeconds": 1
+    }
+   ],
+   "Catch": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "Next": "NotifyOutOfStock"
+    }
+   ],
+   "Next": "NotifyOutOfStock"
+  },
+  "NotifyOutOfStock": {
+   "Type": "Task",
+   "Resource": "arn:aws:states:::lambda:invoke",
+   "Arguments": {
+    "FunctionName": "${WsFn}",
+    "Payload": {
+     "customerId": "{% $customerId %}",
+     "vid": "{% $vid %}",
+     "cid": "{% $cid %}",
+     "orderId": "{% $orderId %}",
+     "status": "OUT_OF_STOCK",
+     "total": "{% $total %}",
+     "scenario": "p3s4",
+     "reason": "{% 'out of stock' %}"
+    }
+   },
+   "Output": "{% $states.input %}",
+   "Retry": [
+    {
+     "ErrorEquals": [
+      "Lambda.ServiceException",
+      "Lambda.TooManyRequestsException"
+     ],
+     "MaxAttempts": 3,
+     "IntervalSeconds": 1,
+     "BackoffRate": 2
+    }
+   ],
+   "Catch": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "Next": "Failed"
+    }
+   ],
+   "Next": "Failed"
+  },
+  "NotifyEmpty": {
+   "Type": "Task",
+   "Resource": "arn:aws:states:::lambda:invoke",
+   "Arguments": {
+    "FunctionName": "${WsFn}",
+    "Payload": {
+     "customerId": "{% $customerId %}",
+     "vid": "{% $vid %}",
+     "cid": "{% $cid %}",
+     "orderId": "{% $orderId %}",
+     "status": "EMPTY_CART",
+     "total": "{% $total %}",
+     "scenario": "p3s4",
+     "reason": "{% 'the cart is empty' %}"
+    }
+   },
+   "Output": "{% $states.input %}",
+   "Retry": [
+    {
+     "ErrorEquals": [
+      "Lambda.ServiceException",
+      "Lambda.TooManyRequestsException"
+     ],
+     "MaxAttempts": 3,
+     "IntervalSeconds": 1,
+     "BackoffRate": 2
+    }
+   ],
+   "Catch": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "Next": "Failed"
+    }
+   ],
+   "Next": "Failed"
+  },
+  "TraceInvokePay": {
+   "Type": "Task",
+   "Resource": "arn:aws:states:::dynamodb:putItem",
+   "Arguments": {
+    "TableName": "${TraceTable}",
+    "Item": {
+     "cid": {
+      "S": "{% $cid %}"
+     },
+     "sk": {
+      "S": "{% $now() & '#checkout-saga#TraceInvokePay' %}"
+     },
+     "id": {
+      "S": "{% $substring($uuid(), 0, 10) %}"
+     },
+     "vid": {
+      "S": "{% $vid %}"
+     },
+     "fn": {
+      "S": "checkout-saga"
+     },
+     "svc": {
+      "S": "lambda"
+     },
+     "engine": {
+      "S": "AWS Lambda"
+     },
+     "op": {
+      "S": "Invoke (.waitForTaskToken)"
+     },
+     "request": {
+      "S": "{% 'lambda.invoke(FunctionName=voltaj-payment, Payload={orderId: ' & $orderId & ', amount: ' & $total & ' EUR, taskToken: AQB...})' %}"
+     },
+     "sc": {
+      "S": "p3s1"
+     },
+     "st": {
+      "S": "2"
+     },
+     "ts": {
+      "S": "{% $now() %}"
+     },
+     "ms": {
+      "N": "{% $string($toMillis($states.context.State.EnteredTime) - $toMillis($t0)) %}"
+     },
+     "ok": {
+      "BOOL": true
+     },
+     "path": {
+      "S": "Step Functions service → regional endpoint"
+     },
+     "auth": {
+      "S": "State machine role (SigV4)"
+     },
+     "expiresAt": {
+      "N": "{% $string($floor($millis() / 1000) + 86400) %}"
+     },
+     "note": {
+      "S": "The workflow gives a task token to the payment function and pauses. It pays nothing while it waits."
+     }
+    }
+   },
+   "Output": "{% $states.input %}",
+   "Retry": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "MaxAttempts": 2,
+     "IntervalSeconds": 1
+    }
+   ],
+   "Catch": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "Next": "Pay"
+    }
+   ],
+   "Next": "Pay"
+  },
+  "Pay": {
+   "Type": "Task",
+   "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
+   "TimeoutSeconds": "{% $number('${PaymentTimeout}') %}",
+   "Arguments": {
+    "FunctionName": "${PaymentFn}",
+    "Payload": {
+     "orderId": "{% $orderId %}",
+     "amount": "{% $total %}",
+     "currency": "EUR",
+     "customerId": "{% $customerId %}",
+     "cid": "{% $cid %}",
+     "vid": "{% $vid %}",
+     "taskToken": "{% $states.context.Task.Token %}"
+    }
+   },
+   "Assign": {
+    "paymentId": "{% $states.result.paymentId %}",
+    "t0": "{% $states.context.State.EnteredTime %}"
+   },
+   "Catch": [
+    {
+     "ErrorEquals": [
+      "States.Timeout"
+     ],
+     "Assign": {
+      "reason": "timeout"
+     },
+     "Next": "TraceTimeout"
+    },
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "Assign": {
+      "reason": "{% $states.errorOutput.Cause ? $states.errorOutput.Cause : 'declined' %}"
+     },
+     "Next": "TraceDeclined"
+    }
+   ],
+   "Next": "TraceInvokeOrder"
+  },
+  "TraceTimeout": {
+   "Type": "Task",
+   "Resource": "arn:aws:states:::dynamodb:putItem",
+   "Arguments": {
+    "TableName": "${TraceTable}",
+    "Item": {
+     "cid": {
+      "S": "{% $cid %}"
+     },
+     "sk": {
+      "S": "{% $now() & '#checkout-saga#TraceTimeout' %}"
+     },
+     "id": {
+      "S": "{% $substring($uuid(), 0, 10) %}"
+     },
+     "vid": {
+      "S": "{% $vid %}"
+     },
+     "fn": {
+      "S": "checkout-saga"
+     },
+     "svc": {
+      "S": "sfn"
+     },
+     "engine": {
+      "S": "AWS Step Functions"
+     },
+     "op": {
+      "S": "States.Timeout"
+     },
+     "request": {
+      "S": "Task Pay: TimeoutSeconds reached"
+     },
+     "sc": {
+      "S": "p3s4"
+     },
+     "st": {
+      "S": "1"
+     },
+     "ts": {
+      "S": "{% $now() %}"
+     },
+     "ms": {
+      "N": "{% $string($toMillis($states.context.State.EnteredTime) - $toMillis($t0)) %}"
+     },
+     "ok": {
+      "BOOL": false
+     },
+     "path": {
+      "S": "Step Functions service → regional endpoint"
+     },
+     "auth": {
+      "S": "State machine role (SigV4)"
+     },
+     "expiresAt": {
+      "N": "{% $string($floor($millis() / 1000) + 86400) %}"
+     },
+     "note": {
+      "S": "No webhook came before the timeout. The Catch block starts the compensation."
+     }
+    }
+   },
+   "Output": "{% $states.input %}",
+   "Retry": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "MaxAttempts": 2,
+     "IntervalSeconds": 1
+    }
+   ],
+   "Catch": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "Next": "Release"
+    }
+   ],
+   "Next": "Release"
+  },
+  "TraceDeclined": {
+   "Type": "Task",
+   "Resource": "arn:aws:states:::dynamodb:putItem",
+   "Arguments": {
+    "TableName": "${TraceTable}",
+    "Item": {
+     "cid": {
+      "S": "{% $cid %}"
+     },
+     "sk": {
+      "S": "{% $now() & '#checkout-saga#TraceDeclined' %}"
+     },
+     "id": {
+      "S": "{% $substring($uuid(), 0, 10) %}"
+     },
+     "vid": {
+      "S": "{% $vid %}"
+     },
+     "fn": {
+      "S": "checkout-saga"
+     },
+     "svc": {
+      "S": "sfn"
+     },
+     "engine": {
+      "S": "AWS Step Functions"
+     },
+     "op": {
+      "S": "SendTaskFailure received"
+     },
+     "request": {
+      "S": "{% 'Task Pay failed: ' & $reason %}"
+     },
+     "sc": {
+      "S": "p3s4"
+     },
+     "st": {
+      "S": "1"
+     },
+     "ts": {
+      "S": "{% $now() %}"
+     },
+     "ms": {
+      "N": "{% $string($toMillis($states.context.State.EnteredTime) - $toMillis($t0)) %}"
+     },
+     "ok": {
+      "BOOL": false
+     },
+     "path": {
+      "S": "Step Functions service → regional endpoint"
+     },
+     "auth": {
+      "S": "State machine role (SigV4)"
+     },
+     "expiresAt": {
+      "N": "{% $string($floor($millis() / 1000) + 86400) %}"
+     },
+     "note": {
+      "S": "The webhook called SendTaskFailure. The Catch block starts the compensation."
+     }
+    }
+   },
+   "Output": "{% $states.input %}",
+   "Retry": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "MaxAttempts": 2,
+     "IntervalSeconds": 1
+    }
+   ],
+   "Catch": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "Next": "Release"
+    }
+   ],
+   "Next": "Release"
+  },
+  "TraceInvokeOrder": {
+   "Type": "Task",
+   "Resource": "arn:aws:states:::dynamodb:putItem",
+   "Arguments": {
+    "TableName": "${TraceTable}",
+    "Item": {
+     "cid": {
+      "S": "{% $cid %}"
+     },
+     "sk": {
+      "S": "{% $now() & '#checkout-saga#TraceInvokeOrder' %}"
+     },
+     "id": {
+      "S": "{% $substring($uuid(), 0, 10) %}"
+     },
+     "vid": {
+      "S": "{% $vid %}"
+     },
+     "fn": {
+      "S": "checkout-saga"
+     },
+     "svc": {
+      "S": "lambda"
+     },
+     "engine": {
+      "S": "AWS Lambda"
+     },
+     "op": {
+      "S": "Invoke"
+     },
+     "request": {
+      "S": "{% 'lambda.invoke(FunctionName=voltaj-order, Payload={orderId: ' & $orderId & ', lines: ' & $count($lines) & ', paymentId: ' & $paymentId & '})' %}"
+     },
+     "sc": {
+      "S": "p3s3"
+     },
+     "st": {
+      "S": "1"
+     },
+     "ts": {
+      "S": "{% $now() %}"
+     },
+     "ms": {
+      "N": "{% $string($toMillis($states.context.State.EnteredTime) - $toMillis($t0)) %}"
+     },
+     "ok": {
+      "BOOL": true
+     },
+     "path": {
+      "S": "Step Functions service → regional endpoint"
+     },
+     "auth": {
+      "S": "State machine role (SigV4)"
+     },
+     "expiresAt": {
+      "N": "{% $string($floor($millis() / 1000) + 86400) %}"
+     },
+     "note": {
+      "S": "The payment is PAID. The workflow continues with the order write."
+     }
+    }
+   },
+   "Output": "{% $states.input %}",
+   "Retry": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "MaxAttempts": 2,
+     "IntervalSeconds": 1
+    }
+   ],
+   "Catch": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "Next": "WriteOrder"
+    }
+   ],
+   "Next": "WriteOrder"
+  },
+  "WriteOrder": {
+   "Type": "Task",
+   "Resource": "arn:aws:states:::lambda:invoke",
+   "Arguments": {
+    "FunctionName": "${OrderFn}",
+    "Payload": {
+     "orderId": "{% $orderId %}",
+     "customerId": "{% $customerId %}",
+     "vid": "{% $vid %}",
+     "cid": "{% $cid %}",
+     "lines": "{% $lines %}",
+     "paymentId": "{% $paymentId %}"
+    }
+   },
+   "Retry": [
+    {
+     "ErrorEquals": [
+      "Lambda.ServiceException",
+      "Lambda.TooManyRequestsException"
+     ],
+     "MaxAttempts": 3,
+     "IntervalSeconds": 1,
+     "BackoffRate": 2
+    }
+   ],
+   "Catch": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "Assign": {
+      "reason": "the order write failed (refund needed)"
+     },
+     "Next": "Release"
+    }
+   ],
+   "Next": "BuildPlaced"
+  },
+  "BuildPlaced": {
+   "Type": "Pass",
+   "Assign": {
+    "placed": "{% {'orderId': $orderId, 'eventId': $orderId & '-placed', 'customerId': $customerId, 'name': $name, 'email': $email, 'smsOptIn': $smsOptIn, 'total': $total, 'currency': 'EUR', 'lines': $lines, 'paymentId': $paymentId, 'cid': $cid, 'vid': $vid} %}",
+    "t0": "{% $states.context.State.EnteredTime %}"
+   },
+   "Next": "PublishPlaced"
+  },
+  "PublishPlaced": {
+   "Type": "Task",
+   "Resource": "arn:aws:states:::events:putEvents",
+   "Arguments": {
+    "Entries": [
+     {
+      "EventBusName": "${BusName}",
+      "Source": "com.shop.checkout",
+      "DetailType": "OrderPlaced",
+      "Detail": "{% $placed %}"
+     }
+    ]
+   },
+   "Retry": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "MaxAttempts": 3,
+     "IntervalSeconds": 1,
+     "BackoffRate": 2
+    }
+   ],
+   "Next": "TracePlaced"
+  },
+  "TracePlaced": {
+   "Type": "Task",
+   "Resource": "arn:aws:states:::dynamodb:putItem",
+   "Arguments": {
+    "TableName": "${TraceTable}",
+    "Item": {
+     "cid": {
+      "S": "{% $cid %}"
+     },
+     "sk": {
+      "S": "{% $now() & '#checkout-saga#TracePlaced' %}"
+     },
+     "id": {
+      "S": "{% $substring($uuid(), 0, 10) %}"
+     },
+     "vid": {
+      "S": "{% $vid %}"
+     },
+     "fn": {
+      "S": "checkout-saga"
+     },
+     "svc": {
+      "S": "eb"
+     },
+     "engine": {
+      "S": "Amazon EventBridge"
+     },
+     "op": {
+      "S": "PutEvents"
+     },
+     "request": {
+      "S": "{% 'events.put_events(Entries=[{EventBusName: voltaj-commerce, Source: com.shop.checkout, DetailType: OrderPlaced, Detail: {orderId: ' & $orderId & ', total: ' & $total & ', ...}}])' %}"
+     },
+     "sc": {
+      "S": "p3s3"
+     },
+     "st": {
+      "S": "4"
+     },
+     "ts": {
+      "S": "{% $now() %}"
+     },
+     "ms": {
+      "N": "{% $string($toMillis($states.context.State.EnteredTime) - $toMillis($t0)) %}"
+     },
+     "ok": {
+      "BOOL": true
+     },
+     "path": {
+      "S": "Step Functions optimized integration → EventBridge"
+     },
+     "auth": {
+      "S": "State machine role (SigV4)"
+     },
+     "expiresAt": {
+      "N": "{% $string($floor($millis() / 1000) + 86400) %}"
+     },
+     "note": {
+      "S": "The bus has the event now. Three rules match it: notify (SNS), fulfil (SQS order buffer) and commerce-log (Lambda producer → MSK)."
+     },
+     "items": {
+      "N": "1"
+     },
+     "event": {
+      "M": {
+       "source": {
+        "S": "com.shop.checkout"
+       },
+       "detailType": {
+        "S": "OrderPlaced"
+       },
+       "bus": {
+        "S": "voltaj-commerce"
+       },
+       "keys": {
+        "M": {
+         "orderId": {
+          "S": "{% $orderId %}"
+         },
+         "total": {
+          "N": "{% $string($total) %}"
+         }
+        }
+       }
+      }
+     },
+     "data": {
+      "M": {
+       "detail": {
+        "S": "{% $string($placed) %}"
+       }
+      }
+     }
+    }
+   },
+   "Output": "{% $states.input %}",
+   "Retry": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "MaxAttempts": 2,
+     "IntervalSeconds": 1
+    }
+   ],
+   "Catch": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "Next": "TraceInvokeWs"
+    }
+   ],
+   "Next": "TraceInvokeWs"
+  },
+  "TraceInvokeWs": {
+   "Type": "Task",
+   "Resource": "arn:aws:states:::dynamodb:putItem",
+   "Arguments": {
+    "TableName": "${TraceTable}",
+    "Item": {
+     "cid": {
+      "S": "{% $cid %}"
+     },
+     "sk": {
+      "S": "{% $now() & '#checkout-saga#TraceInvokeWs' %}"
+     },
+     "id": {
+      "S": "{% $substring($uuid(), 0, 10) %}"
+     },
+     "vid": {
+      "S": "{% $vid %}"
+     },
+     "fn": {
+      "S": "checkout-saga"
+     },
+     "svc": {
+      "S": "lambda"
+     },
+     "engine": {
+      "S": "AWS Lambda"
+     },
+     "op": {
+      "S": "Invoke"
+     },
+     "request": {
+      "S": "{% 'lambda.invoke(FunctionName=voltaj-ws, Payload={customerId, orderId: ' & $orderId & ', status: CONFIRMED})' %}"
+     },
+     "sc": {
+      "S": "p3s3"
+     },
+     "st": {
+      "S": "5"
+     },
+     "ts": {
+      "S": "{% $now() %}"
+     },
+     "ms": {
+      "N": "{% $string($toMillis($states.context.State.EnteredTime) - $toMillis($t0)) %}"
+     },
+     "ok": {
+      "BOOL": true
+     },
+     "path": {
+      "S": "Step Functions service → regional endpoint"
+     },
+     "auth": {
+      "S": "State machine role (SigV4)"
+     },
+     "expiresAt": {
+      "N": "{% $string($floor($millis() / 1000) + 86400) %}"
+     }
+    }
+   },
+   "Output": "{% $states.input %}",
+   "Retry": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "MaxAttempts": 2,
+     "IntervalSeconds": 1
+    }
+   ],
+   "Catch": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "Next": "NotifyConfirmed"
+    }
+   ],
+   "Next": "NotifyConfirmed"
+  },
+  "NotifyConfirmed": {
+   "Type": "Task",
+   "Resource": "arn:aws:states:::lambda:invoke",
+   "Arguments": {
+    "FunctionName": "${WsFn}",
+    "Payload": {
+     "customerId": "{% $customerId %}",
+     "vid": "{% $vid %}",
+     "cid": "{% $cid %}",
+     "orderId": "{% $orderId %}",
+     "status": "CONFIRMED",
+     "total": "{% $total %}",
+     "scenario": "p3s3"
+    }
+   },
+   "Output": "{% $states.input %}",
+   "Retry": [
+    {
+     "ErrorEquals": [
+      "Lambda.ServiceException",
+      "Lambda.TooManyRequestsException"
+     ],
+     "MaxAttempts": 3,
+     "IntervalSeconds": 1,
+     "BackoffRate": 2
+    }
+   ],
+   "Catch": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "Next": "Done"
+    }
+   ],
+   "Next": "Done"
+  },
+  "Done": {
+   "Type": "Succeed"
+  },
+  "Release": {
+   "Type": "Task",
+   "Resource": "arn:aws:states:::aws-sdk:dynamodb:transactWriteItems",
+   "Arguments": {
+    "TransactItems": "{% $append([], $map($lines, function($l) { {'Update': {'TableName': '${StockTable}', 'Key': {'pk': {'S': 'SKU#' & $l.sku}}, 'UpdateExpression': 'SET available = available + :q, reserved = reserved - :q', 'ExpressionAttributeValues': {':q': {'N': $string($l.qty)}, ':z': {'N': '0'}}}} })) %}"
+   },
+   "Assign": {
+    "t0": "{% $states.context.State.EnteredTime %}"
+   },
+   "Retry": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "MaxAttempts": 3,
+     "IntervalSeconds": 1,
+     "BackoffRate": 2
+    }
+   ],
+   "Next": "TraceRelease"
+  },
+  "TraceRelease": {
+   "Type": "Task",
+   "Resource": "arn:aws:states:::dynamodb:putItem",
+   "Arguments": {
+    "TableName": "${TraceTable}",
+    "Item": {
+     "cid": {
+      "S": "{% $cid %}"
+     },
+     "sk": {
+      "S": "{% $now() & '#checkout-saga#TraceRelease' %}"
+     },
+     "id": {
+      "S": "{% $substring($uuid(), 0, 10) %}"
+     },
+     "vid": {
+      "S": "{% $vid %}"
+     },
+     "fn": {
+      "S": "checkout-saga"
+     },
+     "svc": {
+      "S": "ddb"
+     },
+     "engine": {
+      "S": "Amazon DynamoDB"
+     },
+     "op": {
+      "S": "TransactWriteItems"
+     },
+     "request": {
+      "S": "{% 'dynamodb.transact_write_items(' & $join($map($lines, function($l) { 'Update stock SKU#' & $l.sku & ' SET available = available + ' & $l.qty }), '; ') & ')' %}"
+     },
+     "sc": {
+      "S": "p3s4"
+     },
+     "st": {
+      "S": "1"
+     },
+     "ts": {
+      "S": "{% $now() %}"
+     },
+     "ms": {
+      "N": "{% $string($toMillis($states.context.State.EnteredTime) - $toMillis($t0)) %}"
+     },
+     "ok": {
+      "BOOL": true
+     },
+     "path": {
+      "S": "Step Functions SDK integration → DynamoDB"
+     },
+     "auth": {
+      "S": "State machine role (SigV4)"
+     },
+     "expiresAt": {
+      "N": "{% $string($floor($millis() / 1000) + 86400) %}"
+     },
+     "note": {
+      "S": "Compensation: the reserved quantity goes back to available. The saga undoes its own earlier step."
+     },
+     "items": {
+      "N": "{% $string($count($lines)) %}"
+     }
+    }
+   },
+   "Output": "{% $states.input %}",
+   "Retry": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "MaxAttempts": 2,
+     "IntervalSeconds": 1
+    }
+   ],
+   "Catch": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "Next": "BuildFailed"
+    }
+   ],
+   "Next": "BuildFailed"
+  },
+  "BuildFailed": {
+   "Type": "Pass",
+   "Assign": {
+    "failed": "{% {'orderId': $orderId, 'eventId': $orderId & '-failed', 'customerId': $customerId, 'reason': $reason, 'total': $total, 'cid': $cid, 'vid': $vid} %}",
+    "t0": "{% $states.context.State.EnteredTime %}"
+   },
+   "Next": "PublishFailed"
+  },
+  "PublishFailed": {
+   "Type": "Task",
+   "Resource": "arn:aws:states:::events:putEvents",
+   "Arguments": {
+    "Entries": [
+     {
+      "EventBusName": "${BusName}",
+      "Source": "com.shop.checkout",
+      "DetailType": "PaymentFailed",
+      "Detail": "{% $failed %}"
+     }
+    ]
+   },
+   "Retry": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "MaxAttempts": 3,
+     "IntervalSeconds": 1,
+     "BackoffRate": 2
+    }
+   ],
+   "Next": "TraceFailed"
+  },
+  "TraceFailed": {
+   "Type": "Task",
+   "Resource": "arn:aws:states:::dynamodb:putItem",
+   "Arguments": {
+    "TableName": "${TraceTable}",
+    "Item": {
+     "cid": {
+      "S": "{% $cid %}"
+     },
+     "sk": {
+      "S": "{% $now() & '#checkout-saga#TraceFailed' %}"
+     },
+     "id": {
+      "S": "{% $substring($uuid(), 0, 10) %}"
+     },
+     "vid": {
+      "S": "{% $vid %}"
+     },
+     "fn": {
+      "S": "checkout-saga"
+     },
+     "svc": {
+      "S": "eb"
+     },
+     "engine": {
+      "S": "Amazon EventBridge"
+     },
+     "op": {
+      "S": "PutEvents"
+     },
+     "request": {
+      "S": "{% 'events.put_events(Entries=[{EventBusName: voltaj-commerce, Source: com.shop.checkout, DetailType: PaymentFailed, Detail: {orderId: ' & $orderId & ', reason: ' & $reason & '}}])' %}"
+     },
+     "sc": {
+      "S": "p3s4"
+     },
+     "st": {
+      "S": "2"
+     },
+     "ts": {
+      "S": "{% $now() %}"
+     },
+     "ms": {
+      "N": "{% $string($toMillis($states.context.State.EnteredTime) - $toMillis($t0)) %}"
+     },
+     "ok": {
+      "BOOL": true
+     },
+     "path": {
+      "S": "Step Functions optimized integration → EventBridge"
+     },
+     "auth": {
+      "S": "State machine role (SigV4)"
+     },
+     "expiresAt": {
+      "N": "{% $string($floor($millis() / 1000) + 86400) %}"
+     },
+     "items": {
+      "N": "1"
+     },
+     "event": {
+      "M": {
+       "source": {
+        "S": "com.shop.checkout"
+       },
+       "detailType": {
+        "S": "PaymentFailed"
+       },
+       "bus": {
+        "S": "voltaj-commerce"
+       },
+       "keys": {
+        "M": {
+         "orderId": {
+          "S": "{% $orderId %}"
+         },
+         "reason": {
+          "S": "{% $reason %}"
+         }
+        }
+       }
+      }
+     }
+    }
+   },
+   "Output": "{% $states.input %}",
+   "Retry": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "MaxAttempts": 2,
+     "IntervalSeconds": 1
+    }
+   ],
+   "Catch": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "Next": "TraceInvokeWsFail"
+    }
+   ],
+   "Next": "TraceInvokeWsFail"
+  },
+  "TraceInvokeWsFail": {
+   "Type": "Task",
+   "Resource": "arn:aws:states:::dynamodb:putItem",
+   "Arguments": {
+    "TableName": "${TraceTable}",
+    "Item": {
+     "cid": {
+      "S": "{% $cid %}"
+     },
+     "sk": {
+      "S": "{% $now() & '#checkout-saga#TraceInvokeWsFail' %}"
+     },
+     "id": {
+      "S": "{% $substring($uuid(), 0, 10) %}"
+     },
+     "vid": {
+      "S": "{% $vid %}"
+     },
+     "fn": {
+      "S": "checkout-saga"
+     },
+     "svc": {
+      "S": "lambda"
+     },
+     "engine": {
+      "S": "AWS Lambda"
+     },
+     "op": {
+      "S": "Invoke"
+     },
+     "request": {
+      "S": "{% 'lambda.invoke(FunctionName=voltaj-ws, Payload={customerId, orderId: ' & $orderId & ', status: PAYMENT_FAILED})' %}"
+     },
+     "sc": {
+      "S": "p3s4"
+     },
+     "st": {
+      "S": "3"
+     },
+     "ts": {
+      "S": "{% $now() %}"
+     },
+     "ms": {
+      "N": "{% $string($toMillis($states.context.State.EnteredTime) - $toMillis($t0)) %}"
+     },
+     "ok": {
+      "BOOL": true
+     },
+     "path": {
+      "S": "Step Functions service → regional endpoint"
+     },
+     "auth": {
+      "S": "State machine role (SigV4)"
+     },
+     "expiresAt": {
+      "N": "{% $string($floor($millis() / 1000) + 86400) %}"
+     }
+    }
+   },
+   "Output": "{% $states.input %}",
+   "Retry": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "MaxAttempts": 2,
+     "IntervalSeconds": 1
+    }
+   ],
+   "Catch": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "Next": "NotifyFailed"
+    }
+   ],
+   "Next": "NotifyFailed"
+  },
+  "NotifyFailed": {
+   "Type": "Task",
+   "Resource": "arn:aws:states:::lambda:invoke",
+   "Arguments": {
+    "FunctionName": "${WsFn}",
+    "Payload": {
+     "customerId": "{% $customerId %}",
+     "vid": "{% $vid %}",
+     "cid": "{% $cid %}",
+     "orderId": "{% $orderId %}",
+     "status": "PAYMENT_FAILED",
+     "total": "{% $total %}",
+     "scenario": "p3s4",
+     "reason": "{% $reason %}"
+    }
+   },
+   "Output": "{% $states.input %}",
+   "Retry": [
+    {
+     "ErrorEquals": [
+      "Lambda.ServiceException",
+      "Lambda.TooManyRequestsException"
+     ],
+     "MaxAttempts": 3,
+     "IntervalSeconds": 1,
+     "BackoffRate": 2
+    }
+   ],
+   "Catch": [
+    {
+     "ErrorEquals": [
+      "States.ALL"
+     ],
+     "Next": "Failed"
+    }
+   ],
+   "Next": "Failed"
+  },
+  "Failed": {
+   "Type": "Fail",
+   "Error": "CheckoutFailed",
+   "Cause": "{% $exists($reason) ? $reason : 'failed' %}"
+  }
+ }
+}

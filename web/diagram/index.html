@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Architecture diagram · Voltaj Lab</title>
+  <link rel="stylesheet" href="/css/app.css">
+  <style>
+    body { background: #fff; }
+    .dg { display: grid; grid-template-columns: minmax(0, 1fr) 420px; gap: 18px; padding: 16px 20px 40px; max-width: 1800px; margin: 0 auto; }
+    @media (max-width: 1000px) { .dg { grid-template-columns: 1fr; } }
+    .pages { display: flex; gap: 6px; flex-wrap: wrap; margin: 12px 0; }
+    .canvas { border: 1px solid var(--line); border-radius: 14px; overflow: auto; max-height: calc(100vh - 170px); background: #fafafa; cursor: zoom-in; }
+    .canvas.zoom { cursor: zoom-out; } .canvas img { width: 100%; } .canvas.zoom img { width: 2600px; max-width: none; }
+    .side { max-height: calc(100vh - 110px); overflow: auto; position: sticky; top: 16px; }
+    .sc { border: 1px solid var(--line); border-radius: 12px; margin-bottom: 10px; overflow: hidden; }
+    .sc h3 { margin: 0; padding: 9px 12px; font-size: .92rem; color: #fff; background: var(--sc); }
+    .sc .who { padding: 6px 12px 0; font-size: .8rem; color: var(--muted); margin: 0; }
+    .sc ol { list-style: none; margin: 0; padding: 6px 8px 10px; display: grid; gap: 4px; }
+    .sc li { padding: 6px 8px; border-radius: 8px; font-size: .84rem; }
+    .sc li b { display: inline-block; min-width: 2.2em; color: var(--sc); }
+    .sc li.sel { background: color-mix(in srgb, var(--sc) 14%, white); outline: 2px solid var(--sc); }
+    .sc li .card { display: block; margin-top: 4px; font: .72rem/1.4 var(--mono); color: var(--ink-2); background: #f6f5f1; border-radius: 6px; padding: 5px 7px; }
+    .sc li p { margin: 3px 0 0; color: var(--ink-2); font-size: .8rem; }
+  </style>
+</head>
+<body>
+  <section class="lab"><div class="lab-inner"><span class="lab-mark">LAB</span><strong>Architecture diagram</strong>
+    <span style="opacity:.85">Same numbers and colours as the Behind the scenes panel.</span>
+    <div class="lab-actions"><a class="lab-link" href="/">Back to the shop</a><a class="lab-link" href="/lessons">101 lessons</a></div></div></section>
+  <div class="dg">
+    <div>
+      <h1 id="title" style="font-size:1.4rem;margin-top:8px"></h1>
+      <p id="sub" class="meta"></p>
+      <div class="pages" id="pages"></div>
+      <div class="canvas" id="canvas" title="Click to zoom"><img id="img" alt=""></div>
+    </div>
+    <aside class="side" id="side" aria-label="Scenarios and steps"></aside>
+  </div>
+  <script type="module">
+    const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    const q = new URLSearchParams(location.search);
+    const data = await fetch("/data/scenarios.json").then((r) => r.json());
+    let page = Number(q.get("page") || 1);
+    const sel = { sc: q.get("sc"), st: q.get("st") };
+    function draw() {
+      const p = data.pages[page - 1];
+      document.getElementById("title").textContent = p.title;
+      document.getElementById("sub").textContent = p.sub;
+      document.getElementById("img").src = `/diagram/page-${page}.png`;
+      document.getElementById("img").alt = p.title;
+      document.getElementById("pages").innerHTML = data.pages.map((x) => `<button class="chip" type="button" data-p="${x.page}" aria-current="${x.page === page}">${esc(x.name)}</button>`).join("");
+      document.querySelectorAll("[data-p]").forEach((b) => b.onclick = () => { page = Number(b.dataset.p); history.replaceState({}, "", `?page=${page}`); draw(); });
+      document.getElementById("side").innerHTML = p.scenarios.length ? p.scenarios.map((s) => `<section class="sc" style="--sc:${s.color}" id="${s.id}">
+        <h3>Scenario ${s.no} · ${esc(s.title.replace(/^Scenario \d+ - /, ""))}</h3><p class="who">${esc(s.who)} ${esc(s.needs)}</p>
+        <ol>${s.steps.map((st) => `<li class="${sel.sc === s.id && sel.st === st.label ? "sel" : ""}" id="${s.id}-${st.label}"><b>${esc(st.label)}</b>${esc(st.title)}
+          <p>${esc(st.text)}</p><span class="card">${st.card.map(esc).join("<br>")}</span></li>`).join("")}</ol></section>`).join("")
+        : `<p class="meta">Page 1 is the overview: the grey connection map and the main customer journey in 14 steps. Pages 2 to 5 show the scenarios one by one.</p>`;
+      const target = document.getElementById(`${sel.sc}-${sel.st}`) || document.getElementById(sel.sc || "");
+      if (target) target.scrollIntoView({ block: "center" });
+    }
+    document.getElementById("canvas").onclick = (e) => e.currentTarget.classList.toggle("zoom");
+    draw();
+  </script>
+</body>
+</html>

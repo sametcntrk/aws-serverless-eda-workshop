@@ -1,0 +1,11 @@
+[
+ {"page": "home", "href": "/", "title": "The shop", "text": "Choose a persona, look at the panel"},
+ {"page": "search", "href": "/search?q=headphones", "title": "Search", "text": "OpenSearch Serverless and zero-ETL"},
+ {"page": "product", "href": "/p/VLT-1051", "title": "Add to cart", "text": "Cognito authorizer and a conditional write"},
+ {"page": "cart", "href": "/cart", "title": "Checkout", "text": "API Gateway starts the saga directly"},
+ {"page": "checkout", "href": "/cart", "title": "Payment and fan-out", "text": "Task token, webhook, OrderPlaced"},
+ {"page": "inbox", "href": "/inbox", "title": "Notifications", "text": "SNS, SQS, SES and SMS"},
+ {"page": "orders", "href": "/orders", "title": "Order history", "text": "Aurora through RDS Proxy"},
+ {"page": "admin", "href": "/admin", "title": "Back office", "text": "MFA, zero-ETL, image resize"},
+ {"page": "reports", "href": "/reports", "title": "Reports and experiments", "text": "DLQ, replay, burst, Kafka lag"}
+]

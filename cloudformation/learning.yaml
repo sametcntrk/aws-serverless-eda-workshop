@@ -1,0 +1,30 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Voltaj learning layer - live trace table (stream feeds the WebSocket push) and the cost guard counters. Not part of the shop architecture.
+Parameters:
+  Base: {Type: String, Default: voltaj-base}
+Resources:
+  Trace:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: voltaj-trace
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: cid, AttributeType: S}, {AttributeName: sk, AttributeType: S}, {AttributeName: vid, AttributeType: S}]
+      KeySchema: [{AttributeName: cid, KeyType: HASH}, {AttributeName: sk, KeyType: RANGE}]
+      GlobalSecondaryIndexes:
+        - IndexName: by-visitor
+          KeySchema: [{AttributeName: vid, KeyType: HASH}, {AttributeName: sk, KeyType: RANGE}]
+          Projection: {ProjectionType: ALL}
+      TimeToLiveSpecification: {AttributeName: expiresAt, Enabled: true}
+      StreamSpecification: {StreamViewType: NEW_IMAGE}
+      SSESpecification: {SSEEnabled: true, SSEType: KMS, KMSMasterKeyId: {'Fn::ImportValue': !Sub '${Base}-KeyArn'}}
+  Guard:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: voltaj-guard
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: pk, AttributeType: S}]
+      KeySchema: [{AttributeName: pk, KeyType: HASH}]
+      TimeToLiveSpecification: {AttributeName: expiresAt, Enabled: true}
+      SSESpecification: {SSEEnabled: true, SSEType: KMS, KMSMasterKeyId: {'Fn::ImportValue': !Sub '${Base}-KeyArn'}}
+Outputs:
+  TraceStreamArn: {Value: !GetAtt Trace.StreamArn, Export: {Name: !Sub '${AWS::StackName}-TraceStreamArn'}}

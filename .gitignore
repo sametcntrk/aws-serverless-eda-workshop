@@ -1,0 +1,8 @@
+build/
+web/config.json
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+cloudformation/app.json
+cloudformation/network.yaml

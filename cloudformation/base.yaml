@@ -1,0 +1,79 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Voltaj base - customer managed KMS key and secrets. Kept between workshop days.
+Resources:
+  Key:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: Voltaj customer managed key
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: Account
+            Effect: Allow
+            Principal: {AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'}
+            Action: kms:*
+            Resource: '*'
+          - Sid: AwsServicesSendToEncryptedQueuesAndTopics
+            Effect: Allow
+            Principal: {Service: [events.amazonaws.com, sns.amazonaws.com, s3.amazonaws.com, pipes.amazonaws.com]}
+            Action: [kms:GenerateDataKey*, kms:Decrypt]
+            Resource: '*'
+            Condition: {StringEquals: {'aws:SourceAccount': !Ref AWS::AccountId}}
+          - Sid: CloudWatchLogs
+            Effect: Allow
+            Principal: {Service: !Sub 'logs.${AWS::Region}.amazonaws.com'}
+            Action: [kms:Encrypt*, kms:Decrypt*, kms:ReEncrypt*, kms:GenerateDataKey*, kms:Describe*]
+            Resource: '*'
+  KeyAlias:
+    Type: AWS::KMS::Alias
+    Properties: {AliasName: alias/voltaj, TargetKeyId: !Ref Key}
+
+  MqSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: voltaj/mq
+      KmsKeyId: !Ref Key
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "voltaj"}'
+        GenerateStringKey: password
+        PasswordLength: 24
+        ExcludePunctuation: true
+  ThreePlSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: voltaj/mq-3pl
+      KmsKeyId: !Ref Key
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "wms3pl"}'
+        GenerateStringKey: password
+        PasswordLength: 24
+        ExcludePunctuation: true
+  PaySecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: voltaj/paysim
+      Description: Payment simulator API key and webhook signing secret
+      KmsKeyId: !Ref Key
+      GenerateSecretString:
+        SecretStringTemplate: '{"apiKey": "sk_test_voltaj"}'
+        GenerateStringKey: webhookSecret
+        PasswordLength: 40
+        ExcludePunctuation: true
+  OrderSvcSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: voltaj/aurora/order_svc
+      KmsKeyId: !Ref Key
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "order_svc"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludePunctuation: true
+
+Outputs:
+  KeyArn: {Value: !GetAtt Key.Arn, Export: {Name: !Sub '${AWS::StackName}-KeyArn'}}
+  MqSecretArn: {Value: !Ref MqSecret, Export: {Name: !Sub '${AWS::StackName}-MqSecretArn'}}
+  ThreePlSecretArn: {Value: !Ref ThreePlSecret, Export: {Name: !Sub '${AWS::StackName}-ThreePlSecretArn'}}
+  PaySecretArn: {Value: !Ref PaySecret, Export: {Name: !Sub '${AWS::StackName}-PaySecretArn'}}
+  OrderSvcSecretArn: {Value: !Ref OrderSvcSecret, Export: {Name: !Sub '${AWS::StackName}-OrderSvcSecretArn'}}

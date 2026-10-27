@@ -1,0 +1,323 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Voltaj data - KMS key, DynamoDB tables, Aurora Serverless v2 + RDS Proxy, OpenSearch Serverless with the DynamoDB zero-ETL pipeline, S3 buckets, secrets.
+Parameters:
+  Base: {Type: String, Default: voltaj-base}
+  Network: {Type: String, Default: voltaj-network}
+  ShopDomain: {Type: String, Default: shop.tdsynnexlab.link}
+Resources:
+  # ---------------------------------------------------------------- DynamoDB
+  Catalog:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: voltaj-catalog
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: pk, AttributeType: S}, {AttributeName: category, AttributeType: S}, {AttributeName: rank, AttributeType: N}]
+      KeySchema: [{AttributeName: pk, KeyType: HASH}]
+      GlobalSecondaryIndexes:
+        - IndexName: by-category
+          KeySchema: [{AttributeName: category, KeyType: HASH}, {AttributeName: rank, KeyType: RANGE}]
+          Projection: {ProjectionType: ALL}
+      StreamSpecification: {StreamViewType: NEW_AND_OLD_IMAGES}
+      PointInTimeRecoverySpecification: {PointInTimeRecoveryEnabled: true}
+      SSESpecification: {SSEEnabled: true, SSEType: KMS, KMSMasterKeyId: {'Fn::ImportValue': !Sub '${Base}-KeyArn'}}
+  Cart:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: voltaj-cart
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: pk, AttributeType: S}, {AttributeName: sk, AttributeType: S}]
+      KeySchema: [{AttributeName: pk, KeyType: HASH}, {AttributeName: sk, KeyType: RANGE}]
+      TimeToLiveSpecification: {AttributeName: expiresAt, Enabled: true}
+      PointInTimeRecoverySpecification: {PointInTimeRecoveryEnabled: true}
+      SSESpecification: {SSEEnabled: true, SSEType: KMS, KMSMasterKeyId: {'Fn::ImportValue': !Sub '${Base}-KeyArn'}}
+  Stock:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: voltaj-stock
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: pk, AttributeType: S}]
+      KeySchema: [{AttributeName: pk, KeyType: HASH}]
+      PointInTimeRecoverySpecification: {PointInTimeRecoveryEnabled: true}
+      SSESpecification: {SSEEnabled: true, SSEType: KMS, KMSMasterKeyId: {'Fn::ImportValue': !Sub '${Base}-KeyArn'}}
+  Idempotency:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: voltaj-idempotency
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: pk, AttributeType: S}]
+      KeySchema: [{AttributeName: pk, KeyType: HASH}]
+      TimeToLiveSpecification: {AttributeName: expiresAt, Enabled: true}
+      PointInTimeRecoverySpecification: {PointInTimeRecoveryEnabled: true}
+      SSESpecification: {SSEEnabled: true, SSEType: KMS, KMSMasterKeyId: {'Fn::ImportValue': !Sub '${Base}-KeyArn'}}
+  Counters:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: voltaj-counters
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: pk, AttributeType: S}]
+      KeySchema: [{AttributeName: pk, KeyType: HASH}]
+      PointInTimeRecoverySpecification: {PointInTimeRecoveryEnabled: true}
+      SSESpecification: {SSEEnabled: true, SSEType: KMS, KMSMasterKeyId: {'Fn::ImportValue': !Sub '${Base}-KeyArn'}}
+  WsConnections:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: voltaj-ws-connections
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: pk, AttributeType: S}, {AttributeName: sk, AttributeType: S}, {AttributeName: vid, AttributeType: S}]
+      KeySchema: [{AttributeName: pk, KeyType: HASH}, {AttributeName: sk, KeyType: RANGE}]
+      GlobalSecondaryIndexes:
+        - IndexName: by-visitor
+          KeySchema: [{AttributeName: vid, KeyType: HASH}, {AttributeName: sk, KeyType: RANGE}]
+          Projection: {ProjectionType: ALL}
+      TimeToLiveSpecification: {AttributeName: expiresAt, Enabled: true}
+      SSESpecification: {SSEEnabled: true, SSEType: KMS, KMSMasterKeyId: {'Fn::ImportValue': !Sub '${Base}-KeyArn'}}
+
+  # ---------------------------------------------------------------- S3
+  WebBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub voltaj-web-${AWS::AccountId}
+      PublicAccessBlockConfiguration: {BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true}
+      OwnershipControls: {Rules: [{ObjectOwnership: BucketOwnerEnforced}]}
+      BucketEncryption: {ServerSideEncryptionConfiguration: [{ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}}]}
+  UploadsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub voltaj-uploads-${AWS::AccountId}
+      PublicAccessBlockConfiguration: {BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true}
+      OwnershipControls: {Rules: [{ObjectOwnership: BucketOwnerEnforced}]}
+      BucketEncryption: {ServerSideEncryptionConfiguration: [{ServerSideEncryptionByDefault: {SSEAlgorithm: 'aws:kms', KMSMasterKeyID: {'Fn::ImportValue': !Sub '${Base}-KeyArn'}}, BucketKeyEnabled: true}]}
+      NotificationConfiguration: {EventBridgeConfiguration: {EventBridgeEnabled: true}}
+      CorsConfiguration:
+        CorsRules: [{AllowedMethods: [PUT], AllowedOrigins: [!Sub 'https://${ShopDomain}'], AllowedHeaders: ['*'], MaxAge: 3000}]
+      LifecycleConfiguration: {Rules: [{Id: expire, Status: Enabled, ExpirationInDays: 7}]}
+  LakeBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub voltaj-lake-${AWS::AccountId}
+      PublicAccessBlockConfiguration: {BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true}
+      OwnershipControls: {Rules: [{ObjectOwnership: BucketOwnerEnforced}]}
+      BucketEncryption: {ServerSideEncryptionConfiguration: [{ServerSideEncryptionByDefault: {SSEAlgorithm: 'aws:kms', KMSMasterKeyID: {'Fn::ImportValue': !Sub '${Base}-KeyArn'}}, BucketKeyEnabled: true}]}
+      LifecycleConfiguration: {Rules: [{Id: expire, Status: Enabled, ExpirationInDays: 30}]}
+  ExportBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub voltaj-osi-export-${AWS::AccountId}
+      PublicAccessBlockConfiguration: {BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true}
+      OwnershipControls: {Rules: [{ObjectOwnership: BucketOwnerEnforced}]}
+      BucketEncryption: {ServerSideEncryptionConfiguration: [{ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}}]}
+      LifecycleConfiguration: {Rules: [{Id: expire, Status: Enabled, ExpirationInDays: 3}]}
+
+  # ---------------------------------------------------------------- Aurora Serverless v2 + RDS Proxy
+  DbSubnets:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Voltaj private-data subnets
+      SubnetIds: !Split [',', {'Fn::ImportValue': !Sub '${Network}-DataSubnets'}]
+  Aurora:
+    Type: AWS::RDS::DBCluster
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      DBClusterIdentifier: voltaj-aurora
+      Engine: aurora-postgresql
+      EngineVersion: '16.9'
+      DatabaseName: voltaj
+      MasterUsername: voltaj_admin
+      ManageMasterUserPassword: true
+      MasterUserSecret: {KmsKeyId: {'Fn::ImportValue': !Sub '${Base}-KeyArn'}}
+      StorageEncrypted: true
+      KmsKeyId: {'Fn::ImportValue': !Sub '${Base}-KeyArn'}
+      DBSubnetGroupName: !Ref DbSubnets
+      VpcSecurityGroupIds: [{'Fn::ImportValue': !Sub '${Network}-SgAurora'}]
+      ServerlessV2ScalingConfiguration: {MinCapacity: 0.5, MaxCapacity: 16}
+      BackupRetentionPeriod: 1
+      EnableHttpEndpoint: false
+      DeletionProtection: false
+  AuroraWriter:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBClusterIdentifier: !Ref Aurora
+      DBInstanceIdentifier: voltaj-aurora-writer
+      DBInstanceClass: db.serverless
+      Engine: aurora-postgresql
+      AvailabilityZone: !Select [0, !GetAZs '']
+      PromotionTier: 0
+  AuroraReader1:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBClusterIdentifier: !Ref Aurora
+      DBInstanceIdentifier: voltaj-aurora-reader-1
+      DBInstanceClass: db.serverless
+      Engine: aurora-postgresql
+      AvailabilityZone: !Select [1, !GetAZs '']
+      PromotionTier: 1
+  AuroraReader2:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBClusterIdentifier: !Ref Aurora
+      DBInstanceIdentifier: voltaj-aurora-reader-2
+      DBInstanceClass: db.serverless
+      Engine: aurora-postgresql
+      AvailabilityZone: !Select [2, !GetAZs '']
+      PromotionTier: 2
+  ProxyRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement: [{Effect: Allow, Principal: {Service: rds.amazonaws.com}, Action: sts:AssumeRole}]
+      Policies:
+        - PolicyName: secrets
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - {Effect: Allow, Action: secretsmanager:GetSecretValue, Resource: [!GetAtt Aurora.MasterUserSecret.SecretArn, {'Fn::ImportValue': !Sub '${Base}-OrderSvcSecretArn'}]}
+              - {Effect: Allow, Action: kms:Decrypt, Resource: {'Fn::ImportValue': !Sub '${Base}-KeyArn'}}
+  Proxy:
+    Type: AWS::RDS::DBProxy
+    Properties:
+      DBProxyName: voltaj-proxy
+      EngineFamily: POSTGRESQL
+      RequireTLS: true
+      RoleArn: !GetAtt ProxyRole.Arn
+      VpcSubnetIds: !Split [',', {'Fn::ImportValue': !Sub '${Network}-DataSubnets'}]
+      VpcSecurityGroupIds: [{'Fn::ImportValue': !Sub '${Network}-SgProxy'}]
+      Auth:
+        - {AuthScheme: SECRETS, IAMAuth: REQUIRED, SecretArn: !GetAtt Aurora.MasterUserSecret.SecretArn}
+        - {AuthScheme: SECRETS, IAMAuth: REQUIRED, SecretArn: {'Fn::ImportValue': !Sub '${Base}-OrderSvcSecretArn'}}
+  ProxyTargets:
+    Type: AWS::RDS::DBProxyTargetGroup
+    DependsOn: AuroraWriter
+    Properties:
+      DBProxyName: !Ref Proxy
+      TargetGroupName: default
+      DBClusterIdentifiers: [!Ref Aurora]
+      ConnectionPoolConfigurationInfo: {MaxConnectionsPercent: 90, MaxIdleConnectionsPercent: 50}
+
+  # ---------------------------------------------------------------- OpenSearch Serverless + zero-ETL pipeline
+  AossEncryption:
+    Type: AWS::OpenSearchServerless::SecurityPolicy
+    Properties:
+      Name: voltaj-enc
+      Type: encryption
+      Policy: !Sub
+        - '{"Rules":[{"ResourceType":"collection","Resource":["collection/voltaj-search"]}],"AWSOwnedKey":false,"KmsARN":"${KeyArn}"}'
+        - KeyArn: {'Fn::ImportValue': !Sub '${Base}-KeyArn'}
+  AossNetwork:
+    Type: AWS::OpenSearchServerless::SecurityPolicy
+    Properties:
+      Name: voltaj-net
+      Type: network
+      Policy: '[{"Rules":[{"ResourceType":"collection","Resource":["collection/voltaj-search"]},{"ResourceType":"dashboard","Resource":["collection/voltaj-search"]}],"AllowFromPublic":true}]'
+  AossAccess:
+    Type: AWS::OpenSearchServerless::AccessPolicy
+    Properties:
+      Name: voltaj-access
+      Type: data
+      Policy: !Sub >-
+        [{"Rules":[
+          {"ResourceType":"index","Resource":["index/voltaj-search/*"],"Permission":["aoss:*"]},
+          {"ResourceType":"collection","Resource":["collection/voltaj-search"],"Permission":["aoss:*"]}],
+          "Principal":["${PipelineRole.Arn}",
+            "arn:aws:iam::${AWS::AccountId}:role/voltaj-fn-product",
+            "arn:aws:iam::${AWS::AccountId}:role/voltaj-fn-learn",
+            "arn:aws:iam::${AWS::AccountId}:user/scanturk"]}]
+  Collection:
+    Type: AWS::OpenSearchServerless::Collection
+    DependsOn: [AossEncryption, AossNetwork]
+    Properties:
+      Name: voltaj-search
+      Type: SEARCH
+      StandbyReplicas: ENABLED
+      Description: Voltaj product search
+  PipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: voltaj-osi-pipeline
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement: [{Effect: Allow, Principal: {Service: osis-pipelines.amazonaws.com}, Action: sts:AssumeRole}]
+      Policies:
+        - PolicyName: zero-etl
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [dynamodb:DescribeTable, dynamodb:DescribeContinuousBackups, dynamodb:ExportTableToPointInTime]
+                Resource: !GetAtt Catalog.Arn
+              - Effect: Allow
+                Action: [dynamodb:DescribeExport]
+                Resource: !Sub '${Catalog.Arn}/export/*'
+              - Effect: Allow
+                Action: [dynamodb:DescribeStream, dynamodb:GetRecords, dynamodb:GetShardIterator]
+                Resource: !Sub '${Catalog.Arn}/stream/*'
+              - Effect: Allow
+                Action: [s3:GetObject, s3:AbortMultipartUpload, s3:PutObject, s3:PutObjectAcl, s3:DeleteObject]
+                Resource: !Sub '${ExportBucket.Arn}/*'
+              - Effect: Allow
+                Action: [s3:ListBucket, s3:GetBucketLocation]
+                Resource: !GetAtt ExportBucket.Arn
+              - Effect: Allow
+                Action: [kms:Decrypt, kms:GenerateDataKey, kms:DescribeKey]
+                Resource: {'Fn::ImportValue': !Sub '${Base}-KeyArn'}
+              - Effect: Allow
+                Action: [aoss:BatchGetCollection, aoss:APIAccessAll]
+                Resource: !Sub 'arn:aws:aoss:${AWS::Region}:${AWS::AccountId}:collection/*'
+              - Effect: Allow
+                Action: [aoss:CreateSecurityPolicy, aoss:GetSecurityPolicy, aoss:UpdateSecurityPolicy]
+                Resource: '*'
+                Condition: {StringEquals: {'aoss:collection': voltaj-search}}
+  PipelineLogs:
+    Type: AWS::Logs::LogGroup
+    Properties: {LogGroupName: /aws/vendedlogs/OpenSearchIngestion/voltaj-catalog/audit-logs, RetentionInDays: 14}
+  Pipeline:
+    Type: AWS::OSIS::Pipeline
+    DependsOn: AossAccess
+    Properties:
+      PipelineName: voltaj-catalog
+      MinUnits: 1
+      MaxUnits: 4
+      LogPublishingOptions: {IsLoggingEnabled: true, CloudWatchLogDestination: {LogGroup: !Ref PipelineLogs}}
+      PipelineConfigurationBody: !Sub |
+        version: "2"
+        catalog-zero-etl:
+          source:
+            dynamodb:
+              acknowledgments: true
+              tables:
+                - table_arn: "${Catalog.Arn}"
+                  stream:
+                    start_position: "LATEST"
+                  export:
+                    s3_bucket: "${ExportBucket}"
+                    s3_region: "${AWS::Region}"
+                    s3_prefix: "catalog-export/"
+              aws:
+                sts_role_arn: "${PipelineRole.Arn}"
+                region: "${AWS::Region}"
+          sink:
+            - opensearch:
+                hosts: ["${Collection.CollectionEndpoint}"]
+                index: "products"
+                index_type: custom
+                document_id: '${!getMetadata("primary_key")}'
+                action: '${!getMetadata("opensearch_action")}'
+                aws:
+                  sts_role_arn: "${PipelineRole.Arn}"
+                  region: "${AWS::Region}"
+                  serverless: true
+                  serverless_options:
+                    network_policy_name: "voltaj-net"
+Outputs:
+  CatalogArn: {Value: !GetAtt Catalog.Arn, Export: {Name: !Sub '${AWS::StackName}-CatalogArn'}}
+  WebBucket: {Value: !Ref WebBucket, Export: {Name: !Sub '${AWS::StackName}-WebBucket'}}
+  WebBucketDomain: {Value: !GetAtt WebBucket.RegionalDomainName, Export: {Name: !Sub '${AWS::StackName}-WebBucketDomain'}}
+  UploadsBucket: {Value: !Ref UploadsBucket, Export: {Name: !Sub '${AWS::StackName}-UploadsBucket'}}
+  LakeBucket: {Value: !Ref LakeBucket, Export: {Name: !Sub '${AWS::StackName}-LakeBucket'}}
+  AuroraAdminSecretArn: {Value: !GetAtt Aurora.MasterUserSecret.SecretArn, Export: {Name: !Sub '${AWS::StackName}-AuroraAdminSecretArn'}}
+  ProxyEndpoint: {Value: !GetAtt Proxy.Endpoint, Export: {Name: !Sub '${AWS::StackName}-ProxyEndpoint'}}
+  ProxyResourceId: {Value: !Select [6, !Split [':', !GetAtt Proxy.DBProxyArn]], Export: {Name: !Sub '${AWS::StackName}-ProxyResourceId'}}
+  AuroraClusterId: {Value: !Ref Aurora, Export: {Name: !Sub '${AWS::StackName}-AuroraClusterId'}}
+  CollectionEndpoint: {Value: !GetAtt Collection.CollectionEndpoint, Export: {Name: !Sub '${AWS::StackName}-CollectionEndpoint'}}
+  CollectionArn: {Value: !GetAtt Collection.Arn, Export: {Name: !Sub '${AWS::StackName}-CollectionArn'}}

@@ -1,0 +1,89 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: VoltPay - payment provider simulator (external actor of the story) at pay.tdsynnexlab.link. Lambda function URL behind CloudFront.
+Parameters:
+  Base: {Type: String, Default: voltaj-base}
+  HostedZoneId: {Type: String, Default: Z03414782ECSLICW59USM}
+  PayDomain: {Type: String, Default: pay.tdsynnexlab.link}
+  ShopDomain: {Type: String, Default: shop.tdsynnexlab.link}
+  CertArn: {Type: String}
+Resources:
+  Payments:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: voltaj-paysim-payments
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: pk, AttributeType: S}]
+      KeySchema: [{AttributeName: pk, KeyType: HASH}]
+      TimeToLiveSpecification: {AttributeName: expiresAt, Enabled: true}
+  Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: voltaj-paysim
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement: [{Effect: Allow, Principal: {Service: lambda.amazonaws.com}, Action: sts:AssumeRole}]
+      ManagedPolicyArns: [arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole]
+      Policies:
+        - PolicyName: paysim
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - {Effect: Allow, Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem], Resource: !GetAtt Payments.Arn}
+              - {Effect: Allow, Action: dynamodb:PutItem, Resource: !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/voltaj-trace'}
+              - {Effect: Allow, Action: secretsmanager:GetSecretValue, Resource: {'Fn::ImportValue': !Sub '${Base}-PaySecretArn'}}
+              - {Effect: Allow, Action: [kms:Decrypt, kms:GenerateDataKey], Resource: {'Fn::ImportValue': !Sub '${Base}-KeyArn'}}
+  Fn:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: voltaj-paysim
+      Description: VoltPay payment provider simulator
+      Runtime: python3.13
+      Handler: app.lambda_handler
+      Code: ../app/paysim
+      Role: !GetAtt Role.Arn
+      Timeout: 20
+      MemorySize: 256
+      ReservedConcurrentExecutions: 10
+      Environment:
+        Variables:
+          PAYMENTS_TABLE: !Ref Payments
+          PAY_SECRET_ARN: {'Fn::ImportValue': !Sub '${Base}-PaySecretArn'}
+          WEBHOOK_URL: !Sub 'https://${ShopDomain}/api/webhooks/payment'
+          PUBLIC_URL: !Sub 'https://${PayDomain}'
+  FnUrl:
+    Type: AWS::Lambda::Url
+    Properties: {TargetFunctionArn: !Ref Fn, AuthType: NONE}
+  FnUrlPerm:
+    Type: AWS::Lambda::Permission
+    Properties: {FunctionName: !Ref Fn, Action: lambda:InvokeFunctionUrl, Principal: '*', FunctionUrlAuthType: NONE}
+  FnInvokePerm:
+    Type: AWS::Lambda::Permission
+    Properties: {FunctionName: !Ref Fn, Action: lambda:InvokeFunction, Principal: '*', InvokedViaFunctionUrl: true}
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: VoltPay simulator
+        Aliases: [!Ref PayDomain]
+        PriceClass: PriceClass_100
+        ViewerCertificate: {AcmCertificateArn: !Ref CertArn, SslSupportMethod: sni-only, MinimumProtocolVersion: TLSv1.2_2021}
+        Origins:
+          - Id: fn
+            DomainName: !Select [2, !Split ['/', !GetAtt FnUrl.FunctionUrl]]
+            CustomOriginConfig: {OriginProtocolPolicy: https-only, OriginSSLProtocols: [TLSv1.2]}
+        DefaultCacheBehavior:
+          TargetOriginId: fn
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+          OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+  PayA:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref PayDomain
+      Type: A
+      AliasTarget: {DNSName: !GetAtt Distribution.DomainName, HostedZoneId: Z2FDTNDATAQYW2}
+Outputs:
+  PayUrl: {Value: !Sub 'https://${PayDomain}'}
