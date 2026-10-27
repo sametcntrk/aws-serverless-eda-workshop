@@ -306,3 +306,33 @@ framework); Playwright for browser tests with real mouse events.
 After round 3 (user, 2026-10-27): shared understanding confirmed. No identity options needed; Claude picks the look.
 **Continue without asking until v1 is out** (overrides "show 2-3 options", "ask before repo/push" and "show the
 allow list first").
+
+## 12. Build status - v1 (2026-10-27)
+
+Repo: https://github.com/sametcntrk/aws-serverless-eda-workshop (public, `main`), local `~/Pubsub`. Live: https://shop.tdsynnexlab.link.
+All 10 stacks deployed in 179330777878 (eu-central-1; `voltaj-global` in us-east-1). Read `README.md` first.
+
+Verified on the live site with Playwright (`tests/`), real mouse clicks, 0 console errors:
+- `e2e_smoke.py`: all pages load; persona sign-in; WebSocket open; search.
+- `e2e_checkout.py pay`: order confirmed in ~9 s; NAT → VoltPay → webhook → SendTaskSuccess → Aurora → OrderPlaced → WebSocket;
+  fulfillment over MQ → VPN → 3PL; ShipmentDispatched back through Pipes; email and SMS (simulators); 59 panel entries.
+- `e2e_checkout.py decline` (compensation in ~3 s) and `none` (timeout 120 s → compensation).
+- `e2e_admin_lab.py`: demo admin password + TOTP; product save → zero-ETL search finds it in ~12 s; presigned upload → resize;
+  report tabs; lesson opened from a panel entry (big picture 200 documents, hits marked, nested tree, DynamoDB source next to it).
+- `e2e_experiments.py`: duplicate OrderPlaced stopped by 3 consumers; broken email consumer → DLQ (2) → fix → redrive → emails sent;
+  burst of 50.
+- `e2e_tutorial.py`: Next to Finish on 9 pages, click point checked with elementFromPoint, Close/Finish give display none.
+
+Cost while deployed (AWS Price List, eu-central-1, idle): MQ cluster m7g.large $0.98/h, MSK Serverless $0.90/h + partitions,
+OpenSearch Serverless with standby ≥ 2 OCU × $0.339/h, OpenSearch Ingestion ≥ 1 OCU × $0.31/h, Aurora 3 × 0.5 ACU × $0.14/h,
+RDS Proxy, 3 NAT, 27 interface endpoint ENIs, VPN, EC2 t4g.small. About $3.7-4.4 per hour (~$90-105 per day). `tools/destroy.sh`
+deletes these stacks; `tools/deploy.sh all` brings them back (~45 min, seed runs again).
+
+Known gaps / next steps (after v1):
+- Phase 5 says "sample lesson → user approval → the rest": all 18 lessons exist in `web/data/lessons/lessons.json`; the user has not
+  reviewed the sample lesson (`fanout`) yet. Alternatives tables were checked against AWS docs for the main claims; review each table again.
+- Lessons per service (decision 21) are covered by the pattern lessons; no separate short service lessons yet.
+- Schema registry tab is empty until discovery creates `discovered-schemas`.
+- The back-office queue has no consumer by design (it collects copies; 4-day retention).
+- Participant guide (`guide/`) not started (decision 17).
+- Visual polish pass with `frontend-design` not done beyond the base design (decision 7 left the look to Claude).
